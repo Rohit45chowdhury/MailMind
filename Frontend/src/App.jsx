@@ -1,0 +1,39 @@
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { Navigate, Route, Routes } from 'react-router-dom'
+import DashboardLayout from './layouts/DashboardLayout.jsx'
+import SplashScreen from './components/SplashScreen.jsx'
+import LoadingSpinner from './components/LoadingSpinner.jsx'
+
+const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
+const SpamDetection = lazy(() => import('./pages/SpamDetection.jsx'))
+const Summarizer = lazy(() => import('./pages/Summarizer.jsx'))
+const EmailGenerator = lazy(() => import('./pages/EmailGenerator.jsx'))
+const GrammarChecker = lazy(() => import('./pages/GrammarChecker.jsx'))
+const SendEmail = lazy(() => import('./pages/SendEmail.jsx'))
+const Settings = lazy(() => import('./pages/Settings.jsx'))
+
+export default function App() {
+  const [booting, setBooting] = useState(true)
+  useEffect(() => {
+    const t = setTimeout(() => setBooting(false), 1800) // loading page shown on first load
+    return () => clearTimeout(t)
+  }, [])
+  if (booting) return <SplashScreen />
+
+  return (
+    <Suspense fallback={<LoadingSpinner label="Loading page…" className="min-h-screen" />}>
+      <Routes>
+        <Route element={<DashboardLayout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="spam" element={<SpamDetection />} />
+          <Route path="summarize" element={<Summarizer />} />
+          <Route path="generate" element={<EmailGenerator />} />
+          <Route path="grammar" element={<GrammarChecker />} />
+          <Route path="send" element={<SendEmail />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </Suspense>
+  )
+}

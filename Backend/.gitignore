@@ -1,0 +1,23 @@
+
+# Secrets
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+client_secret*.json
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local database and tokens
+*.db
+*.sqlite
+*.sqlite3
+
+# Editors
+.vscode/
+.idea/
