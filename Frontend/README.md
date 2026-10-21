@@ -10,6 +10,9 @@ npm run dev              # http://localhost:5173
 ```
 Start the backend separately (for example `uvicorn main:app --reload`).
 
+## Login
+Pages: `/login`, `/register`. All tool pages are protected (`ProtectedRoute`). The backend sets an httpOnly cookie, so use `localhost` (not `127.0.0.1`) for both frontend and backend, and keep `allow_credentials=True` in CORS.
+
 ## CORS (backend)
 Add this to your FastAPI app:
 ```python

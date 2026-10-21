@@ -1,6 +1,5 @@
 import { LayoutDashboard, ShieldAlert, FileText, PenLine, SpellCheck, Send, Settings } from 'lucide-react'
 
-export const USER_NAME = 'Rohit'
 
 export const nav = [
   { path: '/', label: 'Dashboard', title: 'Dashboard', desc: 'Your email tools in one place.', icon: LayoutDashboard },

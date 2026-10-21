@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import DashboardLayout from './layouts/DashboardLayout.jsx'
 import SplashScreen from './components/SplashScreen.jsx'
 import LoadingSpinner from './components/LoadingSpinner.jsx'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const SpamDetection = lazy(() => import('./pages/SpamDetection.jsx'))
@@ -11,6 +12,8 @@ const EmailGenerator = lazy(() => import('./pages/EmailGenerator.jsx'))
 const GrammarChecker = lazy(() => import('./pages/GrammarChecker.jsx'))
 const SendEmail = lazy(() => import('./pages/SendEmail.jsx'))
 const Settings = lazy(() => import('./pages/Settings.jsx'))
+const Login = lazy(() => import('./pages/Login.jsx'))
+const Register = lazy(() => import('./pages/Register.jsx'))
 
 export default function App() {
   const [booting, setBooting] = useState(true)
@@ -23,6 +26,9 @@ export default function App() {
   return (
     <Suspense fallback={<LoadingSpinner label="Loading page…" className="min-h-screen" />}>
       <Routes>
+        <Route path="login" element={<Login />} />
+        <Route path="register" element={<Register />} />
+        <Route element={<ProtectedRoute />}>
         <Route element={<DashboardLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="spam" element={<SpamDetection />} />
@@ -32,6 +38,7 @@ export default function App() {
           <Route path="send" element={<SendEmail />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
         </Route>
       </Routes>
     </Suspense>

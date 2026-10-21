@@ -4,6 +4,7 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL,
   timeout: 60000,
+  withCredentials: true, // send the login cookie
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -40,5 +41,25 @@ export const summarizeEmail = (p) => post('/summarize', p)
 export const generateEmail = (p) => post('/generate', p)
 export const checkGrammar = (p) => post('/grammar-check', p)
 export const sendEmail = (p) => post('/send', p)
+
+export const getStats = async () => (await api.get('/stats')).data
+export const resetStats = async () => (await api.delete('/stats')).data
+
+export const registerUser = async (p) => (await api.post('/auth/register', p)).data
+export const loginUser = async (p) => (await api.post('/auth/login', p)).data
+export const getMe = async () => (await api.get('/auth/me')).data
+export const logoutUser = async () => (await api.post('/auth/logout')).data
+
+// A 401 from a tool endpoint means the session expired: tell AuthContext to sign out.
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const url = err.config?.url || ''
+    if (err.response?.status === 401 && !url.startsWith('/auth/')) {
+      window.dispatchEvent(new Event('mm-unauthorized'))
+    }
+    return Promise.reject(err)
+  },
+)
 
 export default api

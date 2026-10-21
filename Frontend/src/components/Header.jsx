@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ChevronDown, Menu, Moon, Settings, Sun } from 'lucide-react'
-import { nav, USER_NAME } from '../nav.js'
+import { ChevronDown, LogOut, Menu, Moon, Settings, Sun } from 'lucide-react'
+import { nav } from '../nav.js'
+import { useAuth } from '../context/AuthContext.jsx'
 import { useApp } from '../context/AppContext.jsx'
 
 export default function Header({ onMenu }) {
   const { pathname } = useLocation()
   const { dark, toggleTheme } = useApp()
+  const { user, logout } = useAuth()
   const [menu, setMenu] = useState(false)
   const ref = useRef(null)
   const page = nav.find((n) => n.path === pathname) || nav[0]
@@ -29,15 +31,18 @@ export default function Header({ onMenu }) {
       </button>
       <div className="relative" ref={ref}>
         <button className="flex items-center gap-2 rounded-lg p-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setMenu((m) => !m)} aria-haspopup="menu" aria-expanded={menu}>
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">{USER_NAME[0]}</span>
-          <span className="hidden text-sm font-medium sm:block">{USER_NAME}</span>
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">{user.name[0].toUpperCase()}</span>
+          <span className="hidden text-sm font-medium sm:block">{user.name}</span>
           <ChevronDown className="h-4 w-4 text-slate-400" />
         </button>
         {menu && (
-          <div role="menu" className="card absolute right-0 mt-2 w-44 !p-1">
+          <div role="menu" className="card absolute right-0 mt-2 w-48 !p-1">
             <Link role="menuitem" to="/settings" onClick={() => setMenu(false)} className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800">
               <Settings className="h-4 w-4" /> Settings
             </Link>
+            <button role="menuitem" onClick={logout} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800">
+              <LogOut className="h-4 w-4" /> Sign out
+            </button>
           </div>
         )}
       </div>
