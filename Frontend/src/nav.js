@@ -1,4 +1,4 @@
-import { LayoutDashboard, ShieldAlert, FileText, PenLine, SpellCheck, Send, Settings } from 'lucide-react'
+import { LayoutDashboard, ShieldAlert, FileText, PenLine, SpellCheck, Send, MailCheck, CalendarPlus, Settings } from 'lucide-react'
 
 
 export const nav = [
@@ -8,6 +8,8 @@ export const nav = [
   { path: '/generate', label: 'Email Generator', title: 'Email Generator', desc: 'Write a complete email from a short brief.', icon: PenLine, tone: 'green', blurb: 'Write a full email from a short brief.' },
   { path: '/grammar', label: 'Grammar Checker', title: 'Grammar Checker', desc: 'Fix grammar, spelling and style.', icon: SpellCheck, tone: 'violet', blurb: 'Fix grammar and spelling in your text.' },
   { path: '/send', label: 'Send Email', title: 'Send Email', desc: 'Review and send an email.', icon: Send, tone: 'amber', blurb: 'Review and send an email from the app.' },
+  { path: '/draft', label: 'Approval Draft', title: 'Approval Draft', desc: 'Generate a draft and approve it before sending.', icon: MailCheck, tone: 'teal', blurb: 'AI writes the draft, you approve before it is sent.' },
+  { path: '/calendar', label: 'Calendar Event', title: 'Calendar Event', desc: 'Turn a meeting email into a Google Calendar event.', icon: CalendarPlus, tone: 'indigo', blurb: 'Detect a meeting in an email and add it to your calendar.' },
   { path: '/settings', label: 'Settings', title: 'Settings', desc: 'Appearance and connection details.', icon: Settings },
 ]
 
@@ -17,4 +19,6 @@ export const tones = {
   green: 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/20',
   violet: 'bg-violet-50 text-violet-600 border-violet-100 dark:bg-violet-500/10 dark:border-violet-500/20',
   amber: 'bg-amber-50 text-amber-600 border-amber-100 dark:bg-amber-500/10 dark:border-amber-500/20',
+  teal: 'bg-teal-50 text-teal-600 border-teal-100 dark:bg-teal-500/10 dark:border-teal-500/20',
+  indigo: 'bg-indigo-50 text-indigo-600 border-indigo-100 dark:bg-indigo-500/10 dark:border-indigo-500/20',
 }

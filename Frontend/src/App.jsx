@@ -5,6 +5,7 @@ import SplashScreen from './components/SplashScreen.jsx'
 import LoadingSpinner from './components/LoadingSpinner.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 import DraftApproval from './pages/DraftApproval.jsx'
+import CalendarEvent from './pages/CalendarEvent.jsx'
 
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const SpamDetection = lazy(() => import('./pages/SpamDetection.jsx'))
@@ -39,6 +40,7 @@ export default function App() {
           
           <Route path="send" element={<Navigate to="/draft" replace />} />
           <Route path="draft" element={<DraftApproval />} />
+          <Route path="calendar" element={<CalendarEvent />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

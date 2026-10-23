@@ -11,8 +11,27 @@ import { getErrorMessage, getStats, resetStats } from '../api/axios.js'
 import { timeAgo } from '../utils.js'
 
 const tools = nav.filter((n) => n.tone)
-const toolLabel = { spam: 'Spam Detection', summarize: 'Summarizer', generate: 'Email Generator', grammar: 'Grammar Check', send: 'Send Email' }
-const statusLabel = { spam: 'Spam', not_spam: 'Not spam', summarized: 'Summary ready', generated: 'Generated', checked: 'Checked', sent: 'Sent' }
+const toolLabel = {
+  spam: 'Spam Detection',
+  summarize: 'Summarizer',
+  generate: 'Email Generator',
+  grammar: 'Grammar Check',
+  send: 'Send Email',
+  draft: 'Approval Draft',
+  calendar: 'Calendar Event',
+}
+const statusLabel = {
+  spam: 'Spam',
+  not_spam: 'Not spam',
+  summarized: 'Summary ready',
+  generated: 'Generated',
+  checked: 'Checked',
+  sent: 'Sent',
+  awaiting_approval: 'Awaiting approval',
+  rejected: 'Rejected',
+  created: 'Event created',
+  no_meeting: 'No meeting found',
+}
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -50,7 +69,7 @@ export default function Dashboard() {
         <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Your inbox, under control.</h2>
         <p className="mt-1 text-slate-500 dark:text-slate-400">Welcome back, {user.name}. Pick a tool to get started.</p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">{tools.map((t) => <FeatureCard key={t.path} item={t} />)}</div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{tools.map((t) => <FeatureCard key={t.path} item={t} />)}</div>
       <ErrorMessage message={error} />
       <div className="grid gap-6 lg:grid-cols-3">
         <section className="card" aria-labelledby="act">

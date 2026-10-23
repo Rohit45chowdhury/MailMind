@@ -15,6 +15,8 @@ from emailsender import send_email, EmailSendError
 from grammar_check import grammar_graph
 from user_auth import router as auth_router, get_current_user
 from stats import router as stats_router, log
+from calendar_agent import calendar_graph, TZ_NAME
+from calendar_service import CalendarError, parse_event_times
 
 import uuid
 from langgraph.types import Command
@@ -114,6 +116,25 @@ class DecisionIn(BaseModel):
     action: Literal["approve", "edit", "reject"]
     subject: Optional[str] = None   # sirf edit me
     body: Optional[str] = None      # sirf edit me
+
+
+# ---------- Calendar (human-in-the-loop) ----------
+class EventIn(BaseModel):
+    title: str = ""
+    date: Optional[str] = None          # YYYY-MM-DD
+    start_time: Optional[str] = None    # HH:MM
+    end_time: Optional[str] = None      # HH:MM, empty = 1 hour
+    location: Optional[str] = None
+    attendees: list[str] = []
+    description: str = ""
+
+
+class CalendarDecisionIn(BaseModel):
+    thread_id: str
+    action: Literal["approve", "reject"]
+    event: Optional[EventIn] = None     # edited event, required for approve
+    send_invites: bool = False
+
 
 
 # ---------- Helpers ----------
@@ -266,3 +287,75 @@ async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
         "issue_count": result["issue_count"],
         "issues": result["issues"],
     }
+
+
+
+@app.post("/calendar/draft")
+async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user)):
+    _validate(email)
+
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    await calendar_graph.ainvoke(
+        {
+            "sender": email.sender,
+            "subject": email.subject,
+            "body": email.body,
+            "owner": _owner(user),
+        },
+        config,
+    )
+
+    snap = await calendar_graph.aget_state(config)
+    if not snap.next:  # graph ended without pausing -> no meeting found
+        await log(user, "calendar", email.subject, "no_meeting")
+        return {"has_meeting": False, "thread_id": None, "event": None}
+
+    await log(user, "calendar", email.subject, "awaiting_approval")
+    return {"has_meeting": True, "thread_id": thread_id, "event": snap.values["event"]}
+
+
+@app.post("/calendar/approve")
+async def calendar_approve(req: CalendarDecisionIn, user: dict = Depends(get_current_user)):
+    config = {"configurable": {"thread_id": req.thread_id}}
+
+    snap = await calendar_graph.aget_state(config)
+    if not snap.values or not snap.next:
+        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
+    if snap.values.get("owner") != _owner(user):
+        raise HTTPException(403, "Ye draft tumhara nahi hai")
+
+    title = snap.values["event"].get("title", "")
+
+    if "human_review" in snap.next:
+        payload = {"action": req.action}
+        if req.action == "approve":
+            if not req.event:
+                raise HTTPException(400, "approve ke liye event do")
+            event = req.event.model_dump()
+            try:
+                parse_event_times(event, TZ_NAME)  # validate before resuming
+            except CalendarError as e:
+                raise HTTPException(400, str(e))
+            payload["event"] = event
+            payload["send_invites"] = req.send_invites
+        cmd = Command(resume=payload)
+    else:
+        # Approved earlier but create failed (e.g. token problem): just retry create node
+        if req.action == "reject":
+            await log(user, "calendar", title, "rejected")
+            return {"status": "rejected"}
+        cmd = None
+
+    try:
+        result = await calendar_graph.ainvoke(cmd, config)
+    except CalendarError as e:
+        raise HTTPException(400, str(e))
+
+    if result.get("decision") == "reject":
+        await log(user, "calendar", title, "rejected")
+        return {"status": "rejected"}
+
+    await log(user, "calendar", title, "created")
+    return result["event_result"]
