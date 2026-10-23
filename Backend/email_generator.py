@@ -1,6 +1,5 @@
-
-
-from typing import TypedDict, Optional, Literal
+import re
+from typing import TypedDict, Literal
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
@@ -34,6 +33,14 @@ EMOJI_GUIDE = {
     "expressive": "Use emoji generously (6-10), including in the subject line, but keep it readable.",
 }
 
+NO_RECIPIENT = "the recipient"
+
+EMOJI_PATTERN = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F2FF]+",
+    flags=re.UNICODE,
+)
+PLACEHOLDER_PATTERN = re.compile(r"\[[^\]\n]{1,60}\]")
+
 
 # ---------- State ----------
 class EmailGenState(TypedDict, total=False):
@@ -58,6 +65,25 @@ class GeneratedEmail(BaseModel):
 structured_llm = llm.with_structured_output(GeneratedEmail)
 
 
+# ---------- Helpers ----------
+def _fix_placeholders(text: str, recipient: str, sender_name: str) -> str:
+    """LLM ne [Manager's Name] jaisa kuch chhod diya ho to use code se theek karo."""
+
+    def repl(m: re.Match) -> str:
+        inner = m.group(0).lower()
+        is_sender = any(w in inner for w in ("your", "sender", "my name"))
+        if is_sender and sender_name:
+            return sender_name
+        if not is_sender and recipient and recipient != NO_RECIPIENT:
+            return recipient
+        return ""  # kuch pata nahi to hata do
+
+    text = PLACEHOLDER_PATTERN.sub(repl, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)          # double space
+    text = re.sub(r"\s+,", ",", text)               # "Hi ," -> "Hi,"
+    return text.strip()
+
+
 # ---------- Nodes ----------
 def validate_inputs(state: EmailGenState) -> EmailGenState:
     if not state.get("purpose", "").strip():
@@ -66,22 +92,34 @@ def validate_inputs(state: EmailGenState) -> EmailGenState:
         "tone": state.get("tone") or "professional",
         "length": state.get("length") or "medium",
         "emoji": state.get("emoji") or "none",
-        "recipient": state.get("recipient") or "the recipient",
-        "sender_name": state.get("sender_name") or "",
+        "recipient": (state.get("recipient") or "").strip() or NO_RECIPIENT,
+        "sender_name": (state.get("sender_name") or "").strip(),
         "language": state.get("language") or "English",
     }
 
 
 def build_prompt(state: EmailGenState) -> EmailGenState:
-    sign_off = (
-        f"Sign off with the name: {state['sender_name']}."
-        if state["sender_name"]
-        else "Sign off with a generic closing and no name placeholder."
-    )
+    recipient = state["recipient"]
+    sender = state["sender_name"]
+
+    if recipient == NO_RECIPIENT:
+        greeting_rule = "Start with a plain greeting like 'Hello,' (recipient name is unknown, do NOT invent one)."
+    else:
+        greeting_rule = (
+            f"Greet the recipient using exactly this name: '{recipient}' "
+            f"(e.g. 'Hi {recipient},' or 'Dear {recipient},' for formal tone). "
+            "Do NOT add or invent any other name or surname."
+        )
+
+    if sender:
+        sign_off_rule = f"Sign off with exactly this name and nothing added: '{sender}'."
+    else:
+        sign_off_rule = "Sign off with a generic closing (e.g. 'Best regards') and NO name."
+
     prompt = f"""You are an expert email writer. Write an email based on the details below.
 
 Purpose / what to say: {state['purpose']}
-Recipient: {state['recipient']}
+Recipient: {recipient}
 Language: {state['language']}
 
 Tone: {TONE_GUIDE[state['tone']]}
@@ -90,9 +128,10 @@ Emoji: {EMOJI_GUIDE[state['emoji']]}
 
 Rules:
 - Include a greeting and a closing.
-- {sign_off}
-- Do not invent facts, dates or numbers that were not given.
-- Do not leave placeholders like [Your Name] or [Date].
+- {greeting_rule}
+- {sign_off_rule}
+- Do not invent facts, dates, names or numbers that were not given.
+- NEVER use square brackets or placeholders like [Name], [Manager's Name], [Your Name] or [Date]. If something is unknown, leave it out.
 """
     return {"prompt": prompt}
 
@@ -103,19 +142,14 @@ def generate(state: EmailGenState) -> EmailGenState:
 
 
 def finalize(state: EmailGenState) -> EmailGenState:
-    # Emoji "none" ho to safety ke liye koi emoji bach gaya ho to hata do
-    if state["emoji"] == "none":
-        import re
+    subject = _fix_placeholders(state["subject"], state["recipient"], state["sender_name"])
+    body = _fix_placeholders(state["body"], state["recipient"], state["sender_name"])
 
-        emoji_pattern = re.compile(
-            "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F2FF]+",
-            flags=re.UNICODE,
-        )
-        return {
-            "subject": emoji_pattern.sub("", state["subject"]).strip(),
-            "body": emoji_pattern.sub("", state["body"]).strip(),
-        }
-    return {}
+    if state["emoji"] == "none":
+        subject = EMOJI_PATTERN.sub("", subject).strip()
+        body = EMOJI_PATTERN.sub("", body).strip()
+
+    return {"subject": subject, "body": body}
 
 
 # ---------- Graph ----------

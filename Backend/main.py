@@ -16,6 +16,10 @@ from grammar_check import grammar_graph
 from user_auth import router as auth_router, get_current_user
 from stats import router as stats_router, log
 
+import uuid
+from langgraph.types import Command
+from email_approval import approval_graph
+
 app = FastAPI(title="Email Agent")
 
 app.add_middleware(
@@ -90,6 +94,28 @@ class GenerateOut(BaseModel):
     body: str
 
 
+# ---- approval schemas (GenerateIn ke BAAD) ----
+class DraftIn(GenerateIn):
+    to: str
+    cc: Optional[str] = None
+    bcc: Optional[str] = None
+    html: bool = False
+
+
+class DraftOut(BaseModel):
+    thread_id: str
+    to: str
+    subject: str
+    body: str
+
+
+class DecisionIn(BaseModel):
+    thread_id: str
+    action: Literal["approve", "edit", "reject"]
+    subject: Optional[str] = None   # sirf edit me
+    body: Optional[str] = None      # sirf edit me
+
+
 # ---------- Helpers ----------
 def _validate(email: EmailIn):
     if not email.body.strip():
@@ -135,6 +161,72 @@ async def generate_email(req: GenerateIn, user: dict = Depends(get_current_user)
     result = await email_graph.ainvoke(req.model_dump())
     await log(user, "generate", req.purpose, "generated")
     return {"subject": result["subject"], "body": result["body"]}
+
+
+def _owner(user: dict) -> str:
+    return user.get("email") or user["name"]
+
+
+@app.post("/draft", response_model=DraftOut)
+async def draft(req: DraftIn, user: dict = Depends(get_current_user)):
+    if not req.purpose.strip():
+        raise HTTPException(400, "purpose empty hai")
+
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    payload = req.model_dump()
+    if not payload["sender_name"].strip():
+        payload["sender_name"] = user["name"]
+    payload["owner"] = _owner(user)
+
+    # interrupt() par graph ruk jayega, send node abhi nahi chalega
+    await approval_graph.ainvoke(payload, config)
+
+    snap = await approval_graph.aget_state(config)
+    await log(user, "draft", req.purpose, "awaiting_approval")
+    return {
+        "thread_id": thread_id,
+        "to": snap.values["to"],
+        "subject": snap.values["subject"],
+        "body": snap.values["body"],
+    }
+
+
+@app.post("/approve")
+async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
+    config = {"configurable": {"thread_id": req.thread_id}}
+
+    snap = await approval_graph.aget_state(config)
+    if not snap.values or not snap.next:
+        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
+    if snap.values.get("owner") != _owner(user):
+        raise HTTPException(403, "Ye draft tumhara nahi hai")
+
+    if "human_review" in snap.next:
+        # normal case: user ka decision abhi baaki hai
+        if req.action == "edit" and not (req.subject or req.body):
+            raise HTTPException(400, "edit ke liye subject ya body do")
+        cmd = Command(resume=req.model_dump())
+    else:
+        # pehle approve ho chuka tha par send fail hua (jaise wrong App Password).
+        # Ab sirf send node dubara chalana hai.
+        if req.action == "reject":
+            await log(user, "draft", snap.values["to"], "rejected")
+            return {"status": "rejected"}
+        cmd = None
+
+    try:
+        result = await approval_graph.ainvoke(cmd, config)
+    except EmailSendError as e:
+        raise HTTPException(400, str(e))
+
+    if result.get("decision") == "reject":
+        await log(user, "draft", snap.values["to"], "rejected")
+        return {"status": "rejected"}
+
+    await log(user, "send", snap.values["to"], "sent")
+    return result["send_result"]
 
 
 @app.post("/send")

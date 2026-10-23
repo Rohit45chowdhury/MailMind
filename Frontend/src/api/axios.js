@@ -50,6 +50,9 @@ export const loginUser = async (p) => (await api.post('/auth/login', p)).data
 export const getMe = async () => (await api.get('/auth/me')).data
 export const logoutUser = async () => (await api.post('/auth/logout')).data
 
+export const createDraft = (payload) => api.post('/draft', payload).then((r) => r.data)
+export const decideDraft = (payload) => api.post('/approve', payload).then((r) => r.data)
+
 // A 401 from a tool endpoint means the session expired: tell AuthContext to sign out.
 api.interceptors.response.use(
   (r) => r,

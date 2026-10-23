@@ -4,6 +4,7 @@ import DashboardLayout from './layouts/DashboardLayout.jsx'
 import SplashScreen from './components/SplashScreen.jsx'
 import LoadingSpinner from './components/LoadingSpinner.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
+import DraftApproval from './pages/DraftApproval.jsx'
 
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
 const SpamDetection = lazy(() => import('./pages/SpamDetection.jsx'))
@@ -35,7 +36,9 @@ export default function App() {
           <Route path="summarize" element={<Summarizer />} />
           <Route path="generate" element={<EmailGenerator />} />
           <Route path="grammar" element={<GrammarChecker />} />
-          <Route path="send" element={<SendEmail />} />
+          
+          <Route path="send" element={<Navigate to="/draft" replace />} />
+          <Route path="draft" element={<DraftApproval />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
