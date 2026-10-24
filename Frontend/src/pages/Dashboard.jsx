@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BarChart3, Clock, Inbox, Send, ShieldAlert, FileText, ChevronRight } from 'lucide-react'
+import { BarChart3, Clock, Inbox, ShieldAlert, FileText, ChevronRight } from 'lucide-react'
 import FeatureCard from '../components/FeatureCard.jsx'
 import StatCard from '../components/StatCard.jsx'
 import ErrorMessage from '../components/ErrorMessage.jsx'
@@ -16,7 +16,6 @@ const toolLabel = {
   summarize: 'Summarizer',
   generate: 'Email Generator',
   grammar: 'Grammar Check',
-  send: 'Send Email',
   draft: 'Approval Draft',
   calendar: 'Calendar Event',
 }
@@ -26,7 +25,7 @@ const statusLabel = {
   summarized: 'Summary ready',
   generated: 'Generated',
   checked: 'Checked',
-  sent: 'Sent',
+  sent: 'Sent', // purani history ke liye rakha hai
   awaiting_approval: 'Awaiting approval',
   rejected: 'Rejected',
   created: 'Event created',
@@ -59,7 +58,6 @@ export default function Dashboard() {
     { icon: Inbox, label: 'Emails checked', value: v(s?.checked), tone: 'blue' },
     { icon: ShieldAlert, label: 'Spam detected', value: v(s?.spam), tone: 'red' },
     { icon: FileText, label: 'Summaries created', value: v(s?.summaries), tone: 'green' },
-    { icon: Send, label: 'Emails sent', value: v(s?.sent), tone: 'violet' },
   ]
   const recent = s?.recent || []
 
@@ -92,7 +90,13 @@ export default function Dashboard() {
         <section className="card" aria-labelledby="stats">
           <h3 id="stats" className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white"><BarChart3 className="h-4 w-4 text-indigo-600" /> Quick stats</h3>
           <p className="mb-3 text-xs text-slate-500">Counted from your use of MailMind AI.</p>
-          <div className="grid grid-cols-2 gap-3">{cards.map((c) => <StatCard key={c.label} {...c} />)}</div>
+          <div className="grid grid-cols-2 gap-3">
+            {cards.map((c, i) => (
+              <div key={c.label} className={i === cards.length - 1 && cards.length % 2 === 1 ? 'col-span-2' : ''}>
+                <StatCard {...c} />
+              </div>
+            ))}
+          </div>
         </section>
         <section className="card" aria-labelledby="qa">
           <h3 id="qa" className="mb-3 font-semibold text-slate-900 dark:text-white">Quick actions</h3>

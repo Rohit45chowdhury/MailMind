@@ -12,7 +12,7 @@ const SpamDetection = lazy(() => import('./pages/SpamDetection.jsx'))
 const Summarizer = lazy(() => import('./pages/Summarizer.jsx'))
 const EmailGenerator = lazy(() => import('./pages/EmailGenerator.jsx'))
 const GrammarChecker = lazy(() => import('./pages/GrammarChecker.jsx'))
-const SendEmail = lazy(() => import('./pages/SendEmail.jsx'))
+
 const Settings = lazy(() => import('./pages/Settings.jsx'))
 const Login = lazy(() => import('./pages/Login.jsx'))
 const Register = lazy(() => import('./pages/Register.jsx'))
@@ -38,7 +38,7 @@ export default function App() {
           <Route path="generate" element={<EmailGenerator />} />
           <Route path="grammar" element={<GrammarChecker />} />
           
-          <Route path="send" element={<Navigate to="/draft" replace />} />
+          
           <Route path="draft" element={<DraftApproval />} />
           <Route path="calendar" element={<CalendarEvent />} />
           <Route path="settings" element={<Settings />} />

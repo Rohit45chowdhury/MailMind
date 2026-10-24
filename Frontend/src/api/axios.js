@@ -40,7 +40,7 @@ export const checkSpam = (p) => post('/spam', p)
 export const summarizeEmail = (p) => post('/summarize', p)
 export const generateEmail = (p) => post('/generate', p)
 export const checkGrammar = (p) => post('/grammar-check', p)
-export const sendEmail = (p) => post('/send', p)
+
 
 export const getStats = async () => (await api.get('/stats')).data
 export const resetStats = async () => (await api.delete('/stats')).data

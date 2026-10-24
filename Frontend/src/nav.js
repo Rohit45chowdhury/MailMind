@@ -1,4 +1,4 @@
-import { LayoutDashboard, ShieldAlert, FileText, PenLine, SpellCheck, Send, MailCheck, CalendarPlus, Settings } from 'lucide-react'
+import { LayoutDashboard, ShieldAlert, FileText, PenLine, SpellCheck, MailCheck, CalendarPlus, Settings } from 'lucide-react'
 
 
 export const nav = [
@@ -7,7 +7,7 @@ export const nav = [
   { path: '/summarize', label: 'Email Summarizer', title: 'Email Summarizer', desc: 'Get a short summary of a long email.', icon: FileText, tone: 'blue', blurb: 'Turn a long email into a short summary.' },
   { path: '/generate', label: 'Email Generator', title: 'Email Generator', desc: 'Write a complete email from a short brief.', icon: PenLine, tone: 'green', blurb: 'Write a full email from a short brief.' },
   { path: '/grammar', label: 'Grammar Checker', title: 'Grammar Checker', desc: 'Fix grammar, spelling and style.', icon: SpellCheck, tone: 'violet', blurb: 'Fix grammar and spelling in your text.' },
-  { path: '/send', label: 'Send Email', title: 'Send Email', desc: 'Review and send an email.', icon: Send, tone: 'amber', blurb: 'Review and send an email from the app.' },
+ 
   { path: '/draft', label: 'Approval Draft', title: 'Approval Draft', desc: 'Generate a draft and approve it before sending.', icon: MailCheck, tone: 'teal', blurb: 'AI writes the draft, you approve before it is sent.' },
   { path: '/calendar', label: 'Calendar Event', title: 'Calendar Event', desc: 'Turn a meeting email into a Google Calendar event.', icon: CalendarPlus, tone: 'indigo', blurb: 'Detect a meeting in an email and add it to your calendar.' },
   { path: '/settings', label: 'Settings', title: 'Settings', desc: 'Appearance and connection details.', icon: Settings },
