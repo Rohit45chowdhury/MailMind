@@ -14,6 +14,7 @@ from email_generator import email_graph
 from emailsender import send_email, EmailSendError
 from grammar_check import grammar_graph
 from user_auth import router as auth_router, get_current_user
+from google_oauth import router as google_router
 from stats import router as stats_router, log
 from calendar_agent import calendar_graph, TZ_NAME
 from calendar_service import CalendarError, parse_event_times
@@ -33,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(google_router)
 app.include_router(stats_router)
 
 
@@ -136,7 +138,6 @@ class CalendarDecisionIn(BaseModel):
     send_invites: bool = False
 
 
-
 # ---------- Helpers ----------
 def _validate(email: EmailIn):
     if not email.body.strip():
@@ -145,6 +146,16 @@ def _validate(email: EmailIn):
 
 async def _run_spam_check(email: EmailIn) -> dict:
     return await spam_graph.ainvoke(email.model_dump())
+
+
+def _owner(user: dict) -> str:
+    return user.get("email") or user["name"]
+
+
+def _require_gmail(user: dict) -> None:
+    """Mail bhejne se pehle check: user ne apna Gmail connect kiya hai?"""
+    if not (user.get("google") or {}).get("refresh_token"):
+        raise HTTPException(400, "Pehle Settings me apna Gmail connect karo.")
 
 
 # ---------- Protected Routes ----------
@@ -184,12 +195,9 @@ async def generate_email(req: GenerateIn, user: dict = Depends(get_current_user)
     return {"subject": result["subject"], "body": result["body"]}
 
 
-def _owner(user: dict) -> str:
-    return user.get("email") or user["name"]
-
-
 @app.post("/draft", response_model=DraftOut)
 async def draft(req: DraftIn, user: dict = Depends(get_current_user)):
+    _require_gmail(user)  # generate se pehle hi rok do
     if not req.purpose.strip():
         raise HTTPException(400, "purpose empty hai")
 
@@ -199,7 +207,7 @@ async def draft(req: DraftIn, user: dict = Depends(get_current_user)):
     payload = req.model_dump()
     if not payload["sender_name"].strip():
         payload["sender_name"] = user["name"]
-    payload["owner"] = _owner(user)
+    payload["owner"] = _owner(user)  # login email, send node isi se user dhoondhta hai
 
     # interrupt() par graph ruk jayega, send node abhi nahi chalega
     await approval_graph.ainvoke(payload, config)
@@ -228,13 +236,16 @@ async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
         # normal case: user ka decision abhi baaki hai
         if req.action == "edit" and not (req.subject or req.body):
             raise HTTPException(400, "edit ke liye subject ya body do")
+        if req.action != "reject":
+            _require_gmail(user)
         cmd = Command(resume=req.model_dump())
     else:
-        # pehle approve ho chuka tha par send fail hua (jaise wrong App Password).
+        # pehle approve ho chuka tha par send fail hua (jaise Gmail connection expire).
         # Ab sirf send node dubara chalana hai.
         if req.action == "reject":
             await log(user, "draft", snap.values["to"], "rejected")
             return {"status": "rejected"}
+        _require_gmail(user)
         cmd = None
 
     try:
@@ -252,11 +263,13 @@ async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
 
 @app.post("/send")
 async def send(req: SendIn, user: dict = Depends(get_current_user)):
+    _require_gmail(user)
     data = req.model_dump()
     if not (data.get("sender_name") or "").strip():
         data["sender_name"] = user["name"]
     try:
-        result = await run_in_threadpool(send_email, **data)
+        # user pehla argument hai, mail usi ke Gmail se jaati hai
+        result = await run_in_threadpool(send_email, user, **data)
     except EmailSendError as e:
         raise HTTPException(400, str(e))
     await log(user, "send", req.to, "sent")
@@ -287,7 +300,6 @@ async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
         "issue_count": result["issue_count"],
         "issues": result["issues"],
     }
-
 
 
 @app.post("/calendar/draft")

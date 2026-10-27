@@ -1,14 +1,20 @@
 import axios from 'axios'
 
 // Single configured client. The base URL comes only from VITE_API_URL.
+const BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
+  baseURL: BASE_URL || undefined,
   timeout: 60000,
   withCredentials: true, // send the login cookie
   headers: { 'Content-Type': 'application/json' },
 })
 
-export const API_URL = import.meta.env.VITE_API_URL || '(VITE_API_URL is not set)'
+// For display only (Settings page)
+export const API_URL = BASE_URL || '(VITE_API_URL is not set)'
+
+// Full-page redirect link for "Continue with Google" (use in an <a href>)
+export const googleLoginUrl = `${BASE_URL}/google/login`
 
 /** Turn any axios/JS error into a message a user can act on. */
 export function getErrorMessage(err) {
@@ -20,11 +26,17 @@ export function getErrorMessage(err) {
     if (typeof detail === 'string') text = detail
     else if (Array.isArray(detail)) text = detail.map((d) => `${(d.loc || []).slice(1).join('.') || 'input'}: ${d.msg}`).join('; ')
     else if (data?.message) text = data.message
-    if (status === 400 || status === 422) return text ? `Check your input. ${text}` : 'The server rejected this input. Check the fields and try again.'
+
+    // 422 = validation error from FastAPI
+    if (status === 422) return text ? `Check your input. ${text}` : 'The server rejected this input. Check the fields and try again.'
+    // 400 = our own readable message (e.g. "Pehle Settings me apna Gmail connect karo.")
+    if (status === 400) return text || 'The server rejected this request. Check the fields and try again.'
     if (status >= 500) return `The server hit an error (${status}). ${text || 'Check the backend logs for details.'}`
     return text || `Request failed with status ${status}.`
   }
-  if (err?.request) return `Can't reach the backend at ${API_URL}. Make sure FastAPI is running and CORS allows this origin.`
+  if (err?.request || err?.code === 'ERR_NETWORK') {
+    return `Can't reach the backend at ${API_URL}. Make sure FastAPI is running and CORS allows this origin.`
+  }
   return err?.message || 'Something went wrong.'
 }
 
@@ -41,7 +53,6 @@ export const summarizeEmail = (p) => post('/summarize', p)
 export const generateEmail = (p) => post('/generate', p)
 export const checkGrammar = (p) => post('/grammar-check', p)
 
-
 export const getStats = async () => (await api.get('/stats')).data
 export const resetStats = async () => (await api.delete('/stats')).data
 
@@ -55,6 +66,10 @@ export const decideDraft = (payload) => api.post('/approve', payload).then((r) =
 
 export const createCalendarDraft = (payload) => api.post('/calendar/draft', payload).then((r) => r.data)
 export const decideCalendar = (payload) => api.post('/calendar/approve', payload).then((r) => r.data)
+
+export const getGmailStatus = async () => (await api.get('/google/status')).data
+export const getGmailConnectUrl = async () => (await api.get('/google/connect')).data.url
+export const disconnectGmail = async () => (await api.post('/google/disconnect')).data
 
 // A 401 from a tool endpoint means the session expired: tell AuthContext to sign out.
 api.interceptors.response.use(

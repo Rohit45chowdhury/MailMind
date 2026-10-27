@@ -1,12 +1,16 @@
+import hashlib
+import hmac
 import os
+import secrets
+import smtplib
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 
-import bcrypt
 import jwt
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
@@ -16,42 +20,51 @@ JWT_ALGO = "HS256"
 COOKIE_NAME = "mm_token"
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 TOKEN_DAYS = 7
-MAX_FAILS = 5
-LOCK_MINUTES = 15
+
+# OTP settings
+OTP_MINUTES = 10          # OTP validity
+OTP_MAX_TRIES = 5         # wrong guesses allowed per OTP
+OTP_RESEND_SECONDS = 60   # cooldown between sends
+OTP_MAX_SENDS = 5         # max sends per email in one window
+
+# OTP sender: reuse EMAIL_ADDRESS / EMAIL_APP_PASSWORD from .env
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER = os.getenv("SMTP_USER") or os.getenv("EMAIL_ADDRESS", "")
+SMTP_PASS = (os.getenv("SMTP_PASS") or os.getenv("EMAIL_APP_PASSWORD", "")).replace(" ", "")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "MailMind")
 
 client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-users = client[MONGODB_DB]["users"]
+db = client[MONGODB_DB]
+users = db["users"]
+login_otps = db["login_otps"]
 users.create_index([("email", ASCENDING)], unique=True)
+login_otps.create_index([("email", ASCENDING)], unique=True)
+# Mongo auto-deletes expired OTP docs (runs about every 60s)
+login_otps.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 # ---------- Schemas ----------
-class RegisterIn(BaseModel):
-    name: str = Field(min_length=2, max_length=60)
+class SendOtpIn(BaseModel):
     email: EmailStr
-    password: str = Field(pattern=r"^\d{4}$")  # exactly 4 digits
 
 
-class LoginIn(BaseModel):
+class VerifyIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1, max_length=72)
+    otp: str = Field(pattern=r"^\d{6}$")
 
 
 # ---------- Helpers ----------
-def hash_password(pw: str) -> bytes:
-    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt())
-
-
-def verify_password(pw: str, hashed: bytes) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode("utf-8"), hashed)
-    except ValueError:
-        return False
-
-
 def public_user(doc: dict) -> dict:
-    return {"id": str(doc["_id"]), "name": doc["name"], "email": doc["email"]}
+    g = doc.get("google") or {}
+    return {
+        "id": str(doc["_id"]),
+        "name": doc["name"],
+        "email": doc["email"],
+        "google_connected": bool(g.get("refresh_token")),
+    }
 
 
 def set_auth_cookie(response: Response, user_id: str) -> None:
@@ -78,51 +91,130 @@ def get_current_user(request: Request) -> dict:
     return doc
 
 
+def _aware(dt: datetime) -> datetime:
+    # Mongo returns naive datetimes; treat them as UTC
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _new_otp() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _hash_otp(email: str, otp: str) -> str:
+    # HMAC with server secret, bound to the email
+    return hmac.new(JWT_SECRET.encode(), f"{email}:{otp}".encode(), hashlib.sha256).hexdigest()
+
+
+def _send_otp_email(to_email: str, otp: str) -> None:
+    if not SMTP_USER or not SMTP_PASS:
+        raise RuntimeError("SMTP_USER / SMTP_PASS not set")
+    msg = EmailMessage()
+    msg["Subject"] = f"Your {SMTP_FROM_NAME} sign-in code: {otp}"
+    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USER}>"
+    msg["To"] = to_email
+    msg.set_content(
+        f"Your sign-in code is {otp}\n\n"
+        f"It is valid for {OTP_MINUTES} minutes. "
+        f"If you did not request this, you can ignore this email."
+    )
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as s:
+        s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg)
+
+
 # ---------- Routes ----------
-@router.post("/register", status_code=201)
-def register(data: RegisterIn, response: Response):
-    doc = {
-        "name": data.name.strip(),
-        "email": data.email.lower(),
-        "password_hash": hash_password(data.password),
-        "failed_attempts": 0,
-        "locked_until": None,
-        "created_at": datetime.now(timezone.utc),
-    }
-    try:
-        doc["_id"] = users.insert_one(doc).inserted_id
-    except DuplicateKeyError:
-        raise HTTPException(409, "An account with this email already exists.")
-    set_auth_cookie(response, str(doc["_id"]))
-    return public_user(doc)
-
-
-@router.post("/login")
-def login(data: LoginIn, response: Response):
+@router.post("/send-otp")
+def send_otp(data: SendOtpIn):
+    """Step 1: mail a 6-digit OTP. Same flow for new and existing users."""
+    email = data.email.lower()
     now = datetime.now(timezone.utc)
-    doc = users.find_one({"email": data.email.lower()})
 
-    # Account locked?
-    if doc and doc.get("locked_until"):
-        locked = doc["locked_until"]
-        if locked.tzinfo is None:
-            locked = locked.replace(tzinfo=timezone.utc)
-        if locked > now:
-            raise HTTPException(429, f"Too many wrong attempts. Try again in {LOCK_MINUTES} minutes.")
+    prev = login_otps.find_one({"email": email})
+    if prev:
+        if _aware(prev["resend_after"]) > now:
+            raise HTTPException(429, f"Please wait {OTP_RESEND_SECONDS} seconds before requesting a new OTP.")
+        if prev.get("sends", 0) >= OTP_MAX_SENDS:
+            raise HTTPException(429, "Too many OTP requests. Try again in a few minutes.")
 
-    # Same message for wrong email or PIN, so emails can't be guessed
-    if not doc or not verify_password(data.password, doc["password_hash"]):
-        if doc:
-            fails = doc.get("failed_attempts", 0) + 1
-            update = {"failed_attempts": fails}
-            if fails >= MAX_FAILS:
-                update = {"failed_attempts": 0, "locked_until": now + timedelta(minutes=LOCK_MINUTES)}
-            users.update_one({"_id": doc["_id"]}, {"$set": update})
-        raise HTTPException(401, "Invalid email or PIN.")
+    otp = _new_otp()
+    login_otps.update_one(
+        {"email": email},
+        {
+            "$set": {
+                "otp_hash": _hash_otp(email, otp),
+                "attempts": 0,
+                "resend_after": now + timedelta(seconds=OTP_RESEND_SECONDS),
+                "expires_at": now + timedelta(minutes=OTP_MINUTES),
+            },
+            "$inc": {"sends": 1},
+        },
+        upsert=True,
+    )
+    try:
+        _send_otp_email(email, otp)
+    except Exception:
+        login_otps.delete_one({"email": email})
+        raise HTTPException(502, "OTP email nahi bheji ja saki. Thodi der baad try karo.")
 
-    users.update_one({"_id": doc["_id"]}, {"$set": {"failed_attempts": 0, "locked_until": None}})
-    set_auth_cookie(response, str(doc["_id"]))
-    return public_user(doc)
+    return {
+        "status": "otp_sent",
+        "email": email,
+        "expires_in": OTP_MINUTES * 60,
+        "resend_in": OTP_RESEND_SECONDS,
+    }
+
+
+@router.post("/verify-otp")
+def verify_otp(data: VerifyIn, response: Response):
+    """Step 2: check OTP, then sign in (creating the account if new)."""
+    email = data.email.lower()
+    now = datetime.now(timezone.utc)
+
+    # Count the attempt first (atomic) so parallel guesses cannot bypass the limit
+    rec = login_otps.find_one_and_update(
+        {"email": email}, {"$inc": {"attempts": 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not rec:
+        raise HTTPException(400, "OTP expire ho gaya ya request nahi mili. Naya OTP lo.")
+    if _aware(rec["expires_at"]) <= now:
+        login_otps.delete_one({"email": email})
+        raise HTTPException(400, "OTP expire ho gaya. Naya OTP lo.")
+    if rec["attempts"] > OTP_MAX_TRIES:
+        login_otps.delete_one({"email": email})
+        raise HTTPException(429, "Too many wrong OTPs. Naya OTP lo.")
+
+    if not hmac.compare_digest(rec["otp_hash"], _hash_otp(email, data.otp)):
+        left = OTP_MAX_TRIES - rec["attempts"]
+        if left <= 0:
+            login_otps.delete_one({"email": email})
+            raise HTTPException(429, "Too many wrong OTPs. Naya OTP lo.")
+        raise HTTPException(400, f"Wrong OTP. {left} attempts left.")
+
+    # OTP is correct: single use
+    login_otps.delete_one({"email": email})
+
+    user = users.find_one({"email": email})
+    is_new = user is None
+    if is_new:
+        doc = {
+            "name": email.split("@")[0][:60],
+            "email": email,
+            "password_hash": None,          # passwordless account
+            "email_verified": True,
+            "created_at": now,
+        }
+        try:
+            doc["_id"] = users.insert_one(doc).inserted_id
+            user = doc
+        except DuplicateKeyError:
+            # Created in parallel (for example via Google login)
+            user = users.find_one({"email": email})
+    elif not user.get("email_verified"):
+        users.update_one({"_id": user["_id"]}, {"$set": {"email_verified": True}})
+
+    set_auth_cookie(response, str(user["_id"]))
+    return {**public_user(user), "is_new": is_new}
 
 
 @router.get("/me")

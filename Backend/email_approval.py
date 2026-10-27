@@ -8,6 +8,8 @@ from email_generator import (
     EmailGenState, validate_inputs, build_prompt, generate, finalize,
 )
 from emailsender import send_email
+from user_auth import users
+from emailsender import send_email, EmailSendError
 
 
 class ApprovalState(EmailGenState, total=False):
@@ -44,7 +46,11 @@ def human_review(state: ApprovalState):
 
 
 def send(state: ApprovalState):
+    user = users.find_one({"email": state["owner"]})   # owner = login email
+    if not user:
+        raise EmailSendError("User nahi mila")
     result = send_email(
+        user=user,
         to=state["to"],
         subject=state["subject"],
         body=state["body"],
@@ -54,7 +60,6 @@ def send(state: ApprovalState):
         sender_name=state.get("sender_name") or None,
     )
     return {"send_result": result}
-
 
 def route_after_review(state: ApprovalState) -> str:
     return "send" if state["decision"] == "approve" else "end"
