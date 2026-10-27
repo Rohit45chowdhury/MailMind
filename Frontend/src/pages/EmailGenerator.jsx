@@ -42,7 +42,17 @@ export default function EmailGenerator() {
           <Field id="tone" as="select" label="Tone" value={f.tone} onChange={set('tone')}>{tones.map((t) => <option key={t} value={t}>{cap(t)}</option>)}</Field>
           <Field id="length" as="select" label="Length" value={f.length} onChange={set('length')}>{lengths.map((t) => <option key={t} value={t}>{cap(t)}</option>)}</Field>
           <Field id="emoji" as="select" label="Emoji" value={f.emoji} onChange={set('emoji')}>{emojis.map((t) => <option key={t} value={t}>{cap(t)}</option>)}</Field>
-          <Field id="language" label="Language" value={f.language} onChange={set('language')} />
+          <Field
+            id="language"
+            as="select"
+            label="Language"
+            value={f.language}
+            onChange={set('language')}
+          >
+            <option value="English">English</option>
+            <option value="Hindi">Hindi</option>
+            
+          </Field>
         </div>
         <button className="btn-primary" disabled={loading}>{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PenLine className="h-4 w-4" />}{loading ? 'Generating…' : 'Generate email'}</button>
       </form>
@@ -58,7 +68,24 @@ export default function EmailGenerator() {
             <div className="flex flex-wrap gap-2">
               <CopyButton text={out.subject} label="Copy subject" />
               <CopyButton text={out.body} label="Copy body" />
-              <button type="button" className="btn-ghost" onClick={() => navigate('/send', { state: out })}><Send className="h-4 w-4" />Use in Send Email</button>
+              
+              {/* <button
+                type="button"
+                className="btn-ghost"
+                onClick={() =>
+                  navigate('/draft', {
+                    state: {
+                      ...f,
+                      subject: out.subject,
+                      body: out.body,
+                    },
+                  })
+                }
+              >
+                <Send className="h-4 w-4" />
+                Use in Draft
+              </button> */}
+
               <button type="button" className="btn-ghost" onClick={clear}><Trash2 className="h-4 w-4" />Clear</button>
             </div>
           </>

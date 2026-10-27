@@ -32,7 +32,19 @@ export default function GrammarChecker() {
       <form onSubmit={submit} className="card space-y-4" noValidate>
         <Field id="text" as="textarea" rows={12} label="Your text" placeholder="dear sir, i has completed the work." value={text} onChange={(e) => setText(e.target.value)} />
         <div className="flex flex-wrap items-end gap-4">
-          <Field id="lang" label="Language" className="w-40" value={language} onChange={(e) => setLanguage(e.target.value)} />
+          
+          <Field
+            id="lang"
+            as="select"
+            label="Language"
+            className="w-40"
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+          >
+            <option value="English">English</option>
+            <option value="Hindi">Hindi</option>
+          </Field>
+
           <Toggle id="strict" checked={strict} onChange={setStrict} label="Strict mode" />
         </div>
         <button className="btn-primary" disabled={loading}>{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <SpellCheck className="h-4 w-4" />}{loading ? 'Checking…' : 'Check grammar'}</button>
