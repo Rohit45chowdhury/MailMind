@@ -1,37 +1,44 @@
 from dotenv import load_dotenv
-load_dotenv()  # user_auth import se PEHLE
+
+# Load local .env before importing modules that read environment variables.
+# On Vercel, configure these values in Project Settings -> Environment Variables.
+load_dotenv()
 
 import os
-from typing import Optional, Literal
+import uuid
+from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from langgraph.types import Command
 
 from agents.summrizer import graph
 from agents.spam import spam_graph
 from agents.email_generator import email_graph
-from services.emailsender import send_email, EmailSendError
 from agents.grammar_check import grammar_graph
-from routers.user_auth import router as auth_router, get_current_user
-from services.google_oauth import router as google_router
-from routers.stats import router as stats_router, log, resolve
-from agents.calendar_agent import calendar_graph, TZ_NAME
-from services.calendar_service import CalendarError, parse_event_times
-
-import uuid
-from langgraph.types import Command
 from agents.email_approval import approval_graph
+from agents.calendar_agent import calendar_graph, TZ_NAME
 
-app = FastAPI(title="Email Agent")
+from services.emailsender import send_email, EmailSendError
+from services.calendar_service import CalendarError, parse_event_times
+from services.google_oauth import router as google_router
+from routers.user_auth import router as auth_router, get_current_user
+from routers.stats import router as stats_router, log, resolve
 
-# Production me .env / Render me: ALLOWED_ORIGINS=https://tumhara-frontend.vercel.app
-# (comma separated, aakhir me / mat lagana)
+
+app = FastAPI(title="MailMind API")
+
+
+# ---------- CORS ----------
 ALLOWED_ORIGINS = [
-    o.strip().rstrip("/")
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
-    if o.strip()
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
 ]
 
 app.add_middleware(
@@ -45,6 +52,18 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(google_router)
 app.include_router(stats_router)
+
+
+# ---------- Health ----------
+@app.get("/")
+async def root():
+    return {"status": "ok", "app": "MailMind API"}
+
+
+@app.get("/health")
+async def health():
+    # This checks that the application is responding; it does not verify MongoDB/LLM.
+    return {"status": "ok", "app": "MailMind API"}
 
 
 # ---------- Schemas ----------
@@ -95,8 +114,10 @@ class GenerateIn(BaseModel):
     purpose: str
     recipient: str = ""
     sender_name: str = ""
-    tone: Literal["formal", "professional", "friendly", "casual",
-                  "persuasive", "apologetic", "urgent"] = "professional"
+    tone: Literal[
+        "formal", "professional", "friendly", "casual",
+        "persuasive", "apologetic", "urgent",
+    ] = "professional"
     length: Literal["short", "medium", "long"] = "medium"
     emoji: Literal["none", "minimal", "moderate", "expressive"] = "none"
     language: str = "English"
@@ -107,7 +128,6 @@ class GenerateOut(BaseModel):
     body: str
 
 
-# ---- approval schemas (GenerateIn ke BAAD) ----
 class DraftIn(GenerateIn):
     to: str
     cc: Optional[str] = None
@@ -125,32 +145,31 @@ class DraftOut(BaseModel):
 class DecisionIn(BaseModel):
     thread_id: str
     action: Literal["approve", "edit", "reject"]
-    subject: Optional[str] = None   # sirf edit me
-    body: Optional[str] = None      # sirf edit me
+    subject: Optional[str] = None
+    body: Optional[str] = None
 
 
-# ---------- Calendar (human-in-the-loop) ----------
 class EventIn(BaseModel):
     title: str = ""
-    date: Optional[str] = None          # YYYY-MM-DD
-    start_time: Optional[str] = None    # HH:MM
-    end_time: Optional[str] = None      # HH:MM, empty = 1 hour
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
     location: Optional[str] = None
-    attendees: list[str] = []
+    attendees: list[str] = Field(default_factory=list)
     description: str = ""
 
 
 class CalendarDecisionIn(BaseModel):
     thread_id: str
     action: Literal["approve", "reject"]
-    event: Optional[EventIn] = None     # edited event, required for approve
+    event: Optional[EventIn] = None
     send_invites: bool = False
 
 
 # ---------- Helpers ----------
-def _validate(email: EmailIn):
+def _validate_email(email: EmailIn) -> None:
     if not email.body.strip():
-        raise HTTPException(400, "Email body empty hai")
+        raise HTTPException(status_code=400, detail="Email body empty hai")
 
 
 async def _run_spam_check(email: EmailIn) -> dict:
@@ -158,21 +177,59 @@ async def _run_spam_check(email: EmailIn) -> dict:
 
 
 def _owner(user: dict) -> str:
-    return user.get("email") or user["name"]
+    email = user.get("email")
+    name = user.get("name")
+    if email:
+        return email
+    if name:
+        return name
+    raise HTTPException(status_code=400, detail="User profile mein email/name missing hai")
 
 
 def _require_gmail(user: dict) -> None:
-    """Mail bhejne se pehle check: user ne apna Gmail connect kiya hai?"""
     if not (user.get("google") or {}).get("refresh_token"):
-        raise HTTPException(400, "Pehle Settings me apna Gmail connect karo.")
+        raise HTTPException(
+            status_code=400,
+            detail="Pehle Settings mein apna Gmail connect karo.",
+        )
+
+
+def _thread_config(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+async def _get_graph_state(graph_obj, config: dict):
+    """Convert missing checkpoint/state into a controlled 404 instead of an unhandled 500."""
+    try:
+        snapshot = await graph_obj.aget_state(config)
+    except Exception as exc:
+        # Do not return internal exception details to the client.
+        raise HTTPException(
+            status_code=404,
+            detail="Workflow state nahi mila. Draft expire ho sakta hai.",
+        ) from exc
+
+    if not snapshot.values:
+        raise HTTPException(status_code=404, detail="Draft nahi mila ya expire ho chuka hai")
+    return snapshot
+
+
+def _verify_owner(snapshot, user: dict) -> None:
+    if snapshot.values.get("owner") != _owner(user):
+        raise HTTPException(status_code=403, detail="Ye draft tumhara nahi hai")
 
 
 # ---------- Protected Routes ----------
 @app.post("/spam", response_model=SpamOut)
 async def check_spam(email: EmailIn, user: dict = Depends(get_current_user)):
-    _validate(email)
+    _validate_email(email)
     result = await _run_spam_check(email)
-    await log(user, "spam", email.sender, "spam" if result["is_spam"] else "not_spam")
+    await log(
+        user,
+        "spam",
+        email.sender,
+        "spam" if result["is_spam"] else "not_spam",
+    )
     return {
         "verdict": result["verdict"],
         "is_spam": result["is_spam"],
@@ -183,12 +240,16 @@ async def check_spam(email: EmailIn, user: dict = Depends(get_current_user)):
 
 @app.post("/summarize", response_model=SummaryOut)
 async def summarize(email: EmailIn, user: dict = Depends(get_current_user)):
-    _validate(email)
+    _validate_email(email)
 
     spam = await _run_spam_check(email)
     if spam["is_spam"]:
         await log(user, "summarize", email.subject, "spam")
-        return {"summary": None, "is_spam": True, "spam_reason": spam["reason"]}
+        return {
+            "summary": None,
+            "is_spam": True,
+            "spam_reason": spam["reason"],
+        }
 
     result = await graph.ainvoke(email.model_dump())
     await log(user, "summarize", email.subject, "summarized")
@@ -198,7 +259,8 @@ async def summarize(email: EmailIn, user: dict = Depends(get_current_user)):
 @app.post("/generate", response_model=GenerateOut)
 async def generate_email(req: GenerateIn, user: dict = Depends(get_current_user)):
     if not req.purpose.strip():
-        raise HTTPException(400, "purpose empty hai")
+        raise HTTPException(status_code=400, detail="purpose empty hai")
+
     result = await email_graph.ainvoke(req.model_dump())
     await log(user, "generate", req.purpose, "generated")
     return {"subject": result["subject"], "body": result["body"]}
@@ -206,89 +268,106 @@ async def generate_email(req: GenerateIn, user: dict = Depends(get_current_user)
 
 @app.post("/draft", response_model=DraftOut)
 async def draft(req: DraftIn, user: dict = Depends(get_current_user)):
-    _require_gmail(user)  # generate se pehle hi rok do
+    _require_gmail(user)
     if not req.purpose.strip():
-        raise HTTPException(400, "purpose empty hai")
+        raise HTTPException(status_code=400, detail="purpose empty hai")
 
     thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    config = _thread_config(thread_id)
 
     payload = req.model_dump()
-    if not payload["sender_name"].strip():
-        payload["sender_name"] = user["name"]
-    payload["owner"] = _owner(user)  # login email, send node isi se user dhoondhta hai
+    if not payload.get("sender_name", "").strip():
+        payload["sender_name"] = user.get("name") or ""
+    payload["owner"] = _owner(user)
 
-    # interrupt() par graph ruk jayega, send node abhi nahi chalega
-    await approval_graph.ainvoke(payload, config)
+    try:
+        await approval_graph.ainvoke(payload, config)
+        snapshot = await approval_graph.aget_state(config)
+    except Exception as exc:
+        # Details are available in Vercel Runtime Logs.
+        print(f"Email draft workflow failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Email draft generate nahi hua. Server logs check karo.",
+        ) from exc
 
-    snap = await approval_graph.aget_state(config)
-    # thread_id activity me save: Recent activity se click karke draft wapas khul sake
+    values = snapshot.values or {}
+    if not all(key in values for key in ("to", "subject", "body")):
+        raise HTTPException(
+            status_code=500,
+            detail="Draft workflow ne expected subject/body return nahi kiya.",
+        )
+
     await log(user, "draft", req.purpose, "awaiting_approval", thread_id)
     return {
         "thread_id": thread_id,
-        "to": snap.values["to"],
-        "subject": snap.values["subject"],
-        "body": snap.values["body"],
+        "to": values["to"],
+        "subject": values["subject"],
+        "body": values["body"],
     }
 
 
 @app.get("/draft/{thread_id}", response_model=DraftOut)
 async def get_draft(thread_id: str, user: dict = Depends(get_current_user)):
-    """Recent activity se click karne par pending draft wapas laata hai."""
-    config = {"configurable": {"thread_id": thread_id}}
-    snap = await approval_graph.aget_state(config)
-    if not snap.values or not snap.next:
-        # server restart ke baad draft memory se chala jata hai: row ko 'expired' kar do
-        await resolve(user, thread_id, "expired")
-        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
-    if snap.values.get("owner") != _owner(user):
-        raise HTTPException(403, "Ye draft tumhara nahi hai")
+    config = _thread_config(thread_id)
+    snapshot = await _get_graph_state(approval_graph, config)
+    _verify_owner(snapshot, user)
+
+    if not snapshot.next:
+        raise HTTPException(status_code=404, detail="Draft pehle hi process ho chuka hai")
+
+    values = snapshot.values
     return {
         "thread_id": thread_id,
-        "to": snap.values["to"],
-        "subject": snap.values["subject"],
-        "body": snap.values["body"],
+        "to": values["to"],
+        "subject": values["subject"],
+        "body": values["body"],
     }
 
 
 @app.post("/approve")
 async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
-    config = {"configurable": {"thread_id": req.thread_id}}
+    config = _thread_config(req.thread_id)
+    snapshot = await _get_graph_state(approval_graph, config)
+    _verify_owner(snapshot, user)
 
-    snap = await approval_graph.aget_state(config)
-    if not snap.values or not snap.next:
-        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
-    if snap.values.get("owner") != _owner(user):
-        raise HTTPException(403, "Ye draft tumhara nahi hai")
+    if not snapshot.next:
+        raise HTTPException(status_code=404, detail="Draft pehle hi process ho chuka hai")
 
-    if "human_review" in snap.next:
-        # normal case: user ka decision abhi baaki hai
+    if "human_review" in snapshot.next:
         if req.action == "edit" and not (req.subject or req.body):
-            raise HTTPException(400, "edit ke liye subject ya body do")
+            raise HTTPException(
+                status_code=400,
+                detail="edit ke liye subject ya body do",
+            )
         if req.action != "reject":
             _require_gmail(user)
-        cmd = Command(resume=req.model_dump())
+        command = Command(resume=req.model_dump())
     else:
-        # pehle approve ho chuka tha par send fail hua (jaise Gmail connection expire).
-        # Ab sirf send node dubara chalana hai.
         if req.action == "reject":
             await resolve(user, req.thread_id, "rejected")
             return {"status": "rejected"}
         _require_gmail(user)
-        cmd = None
+        command = None
 
     try:
-        result = await approval_graph.ainvoke(cmd, config)
-    except EmailSendError as e:
-        raise HTTPException(400, str(e))
+        result = await approval_graph.ainvoke(command, config)
+    except EmailSendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"Email approval workflow failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Email send workflow fail hua. Server logs check karo.",
+        ) from exc
 
     if result.get("decision") == "reject":
         await resolve(user, req.thread_id, "rejected")
         return {"status": "rejected"}
 
     await resolve(user, req.thread_id, "approved")
-    await log(user, "send", snap.values["to"], "sent")
-    return result["send_result"]
+    await log(user, "send", snapshot.values.get("to", ""), "sent")
+    return result.get("send_result", {"status": "completed"})
 
 
 @app.post("/send")
@@ -296,12 +375,13 @@ async def send(req: SendIn, user: dict = Depends(get_current_user)):
     _require_gmail(user)
     data = req.model_dump()
     if not (data.get("sender_name") or "").strip():
-        data["sender_name"] = user["name"]
+        data["sender_name"] = user.get("name") or ""
+
     try:
-        # user pehla argument hai, mail usi ke Gmail se jaati hai
         result = await run_in_threadpool(send_email, user, **data)
-    except EmailSendError as e:
-        raise HTTPException(400, str(e))
+    except EmailSendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     await log(user, "send", req.to, "sent")
     return result
 
@@ -309,9 +389,12 @@ async def send(req: SendIn, user: dict = Depends(get_current_user)):
 @app.post("/grammar-check", response_model=GrammarOut)
 async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
     if not req.text.strip():
-        raise HTTPException(400, "Text empty hai")
+        raise HTTPException(status_code=400, detail="Text empty hai")
     if len(req.text) > 8000:
-        raise HTTPException(400, "Text bahut lamba hai (max 8000 characters)")
+        raise HTTPException(
+            status_code=400,
+            detail="Text bahut lamba hai (max 8000 characters)",
+        )
 
     try:
         result = await grammar_graph.ainvoke({
@@ -319,8 +402,12 @@ async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
             "language": req.language,
             "strict": req.strict,
         })
-    except Exception as e:
-        raise HTTPException(500, f"Grammar check failed: {str(e)}")
+    except Exception as exc:
+        print(f"Grammar check failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Grammar check failed. Server logs check karo.",
+        ) from exc
 
     await log(user, "grammar", f"{result['issue_count']} issues", "checked")
     return {
@@ -334,79 +421,110 @@ async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
 
 @app.post("/calendar/draft")
 async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user)):
-    _validate(email)
+    _validate_email(email)
 
     thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    config = _thread_config(thread_id)
 
-    await calendar_graph.ainvoke(
-        {
-            "sender": email.sender,
-            "subject": email.subject,
-            "body": email.body,
-            "owner": _owner(user),
-        },
-        config,
-    )
+    try:
+        await calendar_graph.ainvoke(
+            {
+                "sender": email.sender,
+                "subject": email.subject,
+                "body": email.body,
+                "owner": _owner(user),
+            },
+            config,
+        )
+        snapshot = await calendar_graph.aget_state(config)
+    except Exception as exc:
+        print(f"Calendar draft workflow failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Calendar draft process nahi hua. Server logs check karo.",
+        ) from exc
 
-    snap = await calendar_graph.aget_state(config)
-    if not snap.next:  # graph ended without pausing -> no meeting found
+    if not snapshot.next:
         await log(user, "calendar", email.subject, "no_meeting")
         return {"has_meeting": False, "thread_id": None, "event": None}
 
     await log(user, "calendar", email.subject, "awaiting_approval", thread_id)
-    return {"has_meeting": True, "thread_id": thread_id, "event": snap.values["event"]}
+    return {
+        "has_meeting": True,
+        "thread_id": thread_id,
+        "event": snapshot.values["event"],
+    }
 
 
 @app.get("/calendar/draft/{thread_id}")
 async def get_calendar_draft(thread_id: str, user: dict = Depends(get_current_user)):
-    """Recent activity se click karne par pending calendar draft wapas laata hai."""
-    config = {"configurable": {"thread_id": thread_id}}
-    snap = await calendar_graph.aget_state(config)
-    if not snap.values or not snap.next:
-        await resolve(user, thread_id, "expired")
-        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
-    if snap.values.get("owner") != _owner(user):
-        raise HTTPException(403, "Ye draft tumhara nahi hai")
-    return {"has_meeting": True, "thread_id": thread_id, "event": snap.values["event"]}
+    config = _thread_config(thread_id)
+    snapshot = await _get_graph_state(calendar_graph, config)
+    _verify_owner(snapshot, user)
+
+    if not snapshot.next:
+        raise HTTPException(status_code=404, detail="Calendar draft pehle hi process ho chuka hai")
+
+    return {
+        "has_meeting": True,
+        "thread_id": thread_id,
+        "event": snapshot.values["event"],
+    }
 
 
 @app.post("/calendar/approve")
-async def calendar_approve(req: CalendarDecisionIn, user: dict = Depends(get_current_user)):
-    config = {"configurable": {"thread_id": req.thread_id}}
+async def calendar_approve(
+    req: CalendarDecisionIn,
+    user: dict = Depends(get_current_user),
+):
+    config = _thread_config(req.thread_id)
+    snapshot = await _get_graph_state(calendar_graph, config)
+    _verify_owner(snapshot, user)
 
-    snap = await calendar_graph.aget_state(config)
-    if not snap.values or not snap.next:
-        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
-    if snap.values.get("owner") != _owner(user):
-        raise HTTPException(403, "Ye draft tumhara nahi hai")
+    if not snapshot.next:
+        raise HTTPException(
+            status_code=404,
+            detail="Calendar draft pehle hi process ho chuka hai",
+        )
 
-    title = snap.values["event"].get("title", "")
+    title = snapshot.values.get("event", {}).get("title", "")
 
-    if "human_review" in snap.next:
+    if "human_review" in snapshot.next:
         payload = {"action": req.action}
+
         if req.action == "approve":
             if not req.event:
-                raise HTTPException(400, "approve ke liye event do")
+                raise HTTPException(
+                    status_code=400,
+                    detail="approve ke liye event details do",
+                )
+
             event = req.event.model_dump()
             try:
-                parse_event_times(event, TZ_NAME)  # validate before resuming
-            except CalendarError as e:
-                raise HTTPException(400, str(e))
+                parse_event_times(event, TZ_NAME)
+            except CalendarError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
             payload["event"] = event
             payload["send_invites"] = req.send_invites
-        cmd = Command(resume=payload)
+
+        command = Command(resume=payload)
     else:
-        # Approved earlier but create failed (e.g. token problem): just retry create node
         if req.action == "reject":
             await resolve(user, req.thread_id, "rejected")
             return {"status": "rejected"}
-        cmd = None
+        command = None
 
     try:
-        result = await calendar_graph.ainvoke(cmd, config)
-    except CalendarError as e:
-        raise HTTPException(400, str(e))
+        result = await calendar_graph.ainvoke(command, config)
+    except CalendarError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"Calendar approval workflow failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Calendar event create nahi hua. Server logs check karo.",
+        ) from exc
 
     if result.get("decision") == "reject":
         await resolve(user, req.thread_id, "rejected")
@@ -414,4 +532,4 @@ async def calendar_approve(req: CalendarDecisionIn, user: dict = Depends(get_cur
 
     await resolve(user, req.thread_id, "approved")
     await log(user, "calendar", title, "created")
-    return result["event_result"]
+    return result.get("event_result", {"status": "completed"})
