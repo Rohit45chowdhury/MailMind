@@ -8,8 +8,8 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt
 
-from llm import llm
-from calendar_service import create_event
+from services.llm import llm
+from services.calendar_service import create_event
 
 TZ_NAME = os.getenv("CALENDAR_TIMEZONE", "Asia/Kolkata")
 

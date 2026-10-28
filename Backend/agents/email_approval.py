@@ -4,12 +4,12 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt
 
-from email_generator import (
+from agents.email_generator import (
     EmailGenState, validate_inputs, build_prompt, generate, finalize,
 )
-from emailsender import send_email
-from user_auth import users
-from emailsender import send_email, EmailSendError
+from services.emailsender import send_email
+from routers.user_auth import users
+from services.emailsender import send_email, EmailSendError
 
 
 class ApprovalState(EmailGenState, total=False):

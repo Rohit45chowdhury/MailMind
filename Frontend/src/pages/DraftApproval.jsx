@@ -1,6 +1,5 @@
-
 import { useEffect, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle2,
   Loader2,
@@ -16,6 +15,8 @@ import useRequest from '../hooks/useRequest.js'
 import {
   createDraft,
   decideDraft,
+  getDraft,
+  getErrorMessage,
   getGmailStatus,
 } from '../api/axios.js'
 import { useApp } from '../context/AppContext.jsx'
@@ -72,6 +73,11 @@ const initialForm = {
 export default function DraftApproval() {
   const { state } = useLocation()
   const { addActivity } = useApp()
+
+  // Dashboard ki Recent activity se aaya hua ?thread=<id>
+  const [params, setParams] = useSearchParams()
+  const threadId = params.get('thread')
+  const [resuming, setResuming] = useState(false)
 
   const [f, setF] = useState(() => ({
     ...initialForm,
@@ -142,6 +148,41 @@ export default function DraftApproval() {
     }
   }, [state])
 
+  // Recent activity se pending draft wapas kholo (?thread=<id>)
+  useEffect(() => {
+    if (!threadId) return
+    if (draft?.thread_id === threadId) return // already loaded
+
+    let cancelled = false
+    setResuming(true)
+    deciding.reset()
+
+    getDraft(threadId)
+      .then((res) => {
+        if (cancelled) return
+        setDraft(res)
+        setEdit({ subject: res.subject || '', body: res.body || '' })
+        setF((prev) => ({ ...prev, to: res.to || prev.to }))
+        setDone(null)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        drafting.fail(
+          e?.response?.status === 404
+            ? 'Ye draft expire ho gaya ya pehle hi process ho chuka hai. Naya draft banao.'
+            : getErrorMessage(e)
+        )
+        setParams({}, { replace: true }) // galat/purane thread URL se hata do
+      })
+      .finally(() => {
+        if (!cancelled) setResuming(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [threadId])
+
   const gmailMissing = gmail && !gmail.connected
 
   const changed =
@@ -207,6 +248,7 @@ export default function DraftApproval() {
         body: res.body || edit.body,
       })
       setDone(null)
+      if (threadId) setParams({}, { replace: true }) // purana ?thread= hata do
     }
   }
 
@@ -233,6 +275,7 @@ export default function DraftApproval() {
       setSentFrom(res.from || '')
       addActivity('Approved Send', draft.to, 'Sent')
       setDone('sent')
+      if (threadId) setParams({}, { replace: true }) // refresh par dobara fetch na ho
     }
   }
 
@@ -249,6 +292,7 @@ export default function DraftApproval() {
     if (res) {
       addActivity('Draft', draft.to, 'Rejected')
       setDone('rejected')
+      if (threadId) setParams({}, { replace: true })
     }
   }
 
@@ -258,6 +302,7 @@ export default function DraftApproval() {
     setEdit({ subject: '', body: '' })
     setDone(null)
     setSentFrom('')
+    if (threadId) setParams({}, { replace: true })
 
     drafting.reset()
     deciding.reset()
@@ -278,6 +323,16 @@ export default function DraftApproval() {
           <Link to="/settings" className="font-semibold underline">
             Connect Gmail
           </Link>
+        </p>
+      )}
+
+      {resuming && (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-300"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading your pending draft…
         </p>
       )}
 

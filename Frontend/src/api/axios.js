@@ -67,6 +67,12 @@ export const decideDraft = (payload) => api.post('/approve', payload).then((r) =
 export const createCalendarDraft = (payload) => api.post('/calendar/draft', payload).then((r) => r.data)
 export const decideCalendar = (payload) => api.post('/calendar/approve', payload).then((r) => r.data)
 
+export const getDraft = (threadId) =>
+  api.get(`/draft/${threadId}`).then((r) => r.data)
+
+export const getCalendarDraft = (threadId) =>
+  api.get(`/calendar/draft/${threadId}`).then((r) => r.data)
+
 export const getGmailStatus = async () => (await api.get('/google/status')).data
 export const getGmailConnectUrl = async () => (await api.get('/google/connect')).data.url
 export const disconnectGmail = async () => (await api.post('/google/disconnect')).data

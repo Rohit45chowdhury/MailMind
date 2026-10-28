@@ -9,8 +9,8 @@ from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token as google_id_token
 from google_auth_oauthlib.flow import Flow
 
-from token_crypto import enc
-from user_auth import users, get_current_user, set_auth_cookie, JWT_SECRET, JWT_ALGO
+from core.token_crypto import enc
+from routers.user_auth import users, get_current_user, set_auth_cookie, JWT_SECRET, JWT_ALGO
 
 # Google may return fewer scopes than requested (user unticks a box).
 # Without this, oauthlib raises a scope-mismatch error.

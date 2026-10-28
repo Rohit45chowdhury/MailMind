@@ -6,7 +6,7 @@ from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
-from llm import llm
+from services.llm import llm
 
 
 

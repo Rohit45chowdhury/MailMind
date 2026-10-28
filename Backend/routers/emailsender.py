@@ -12,8 +12,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from token_crypto import enc, dec
-from user_auth import users
+from core.token_crypto import enc, dec
+from routers.user_auth import users
 
 load_dotenv()
 

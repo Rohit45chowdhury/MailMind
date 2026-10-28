@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { BarChart3, Clock, Inbox, ShieldAlert, FileText, ChevronRight } from 'lucide-react'
 import FeatureCard from '../components/FeatureCard.jsx'
 import StatCard from '../components/StatCard.jsx'
@@ -27,13 +27,23 @@ const statusLabel = {
   checked: 'Checked',
   sent: 'Sent', // purani history ke liye rakha hai
   awaiting_approval: 'Awaiting approval',
+  approved: 'Approved',
   rejected: 'Rejected',
+  expired: 'Expired',
   created: 'Event created',
   no_meeting: 'No meeting found',
 }
 
+// Pending draft par click karne par kaunsa page khulega.
+// NOTE: apne nav.js / routes ke asli path yahan daalo.
+const resumePath = {
+  draft: '/draft',
+  calendar: '/calendar',
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [s, setS] = useState(null)
   const [error, setError] = useState('')
 
@@ -52,6 +62,9 @@ export default function Dashboard() {
   const clear = async () => {
     try { await resetStats(); load() } catch (e) { setError(getErrorMessage(e)) }
   }
+
+  // Pending draft ko wapas kholo: ?thread=<id> ke saath tool ke page par jao
+  const resume = (a) => navigate(`${resumePath[a.tool]}?thread=${a.thread_id}`)
 
   const v = (n) => (s ? n : '…')
   const cards = [
@@ -75,15 +88,38 @@ export default function Dashboard() {
           <p className="mb-3 text-xs text-slate-500">Your last actions in MailMind AI. {recent.length > 0 && <button onClick={clear} className="underline">Clear history</button>}</p>
           {recent.length === 0 ? <EmptyState icon={Clock} title="No activity yet" text="Run any tool and it will show up here." /> : (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-              {recent.map((a, i) => (
-                <li key={i} className="flex items-center justify-between gap-2 py-2.5 text-sm">
-                  <div className="min-w-0">
-                    <p className="font-medium">{toolLabel[a.tool] || a.tool}</p>
-                    <p className="truncate text-xs text-slate-500">{a.detail} · {timeAgo(a.at)}</p>
-                  </div>
-                  <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">{statusLabel[a.status] || a.status}</span>
-                </li>
-              ))}
+              {recent.map((a, i) => {
+                // sirf pending draft/calendar rows resume ho sakti hain (backend sirf unhi ko thread_id bhejta hai)
+                const resumable = Boolean(a.thread_id && resumePath[a.tool])
+                const content = (
+                  <>
+                    <div className="min-w-0">
+                      <p className="font-medium">{toolLabel[a.tool] || a.tool}</p>
+                      <p className="truncate text-xs text-slate-500">{a.detail} · {timeAgo(a.at)}</p>
+                    </div>
+                    <span className="flex shrink-0 items-center gap-1">
+                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">{statusLabel[a.status] || a.status}</span>
+                      {resumable && <ChevronRight className="h-4 w-4 text-slate-400" aria-hidden="true" />}
+                    </span>
+                  </>
+                )
+                return (
+                  <li key={a.id || i}>
+                    {resumable ? (
+                      <button
+                        type="button"
+                        onClick={() => resume(a)}
+                        title="Open this draft"
+                        className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-2 rounded-lg px-2 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                      >
+                        {content}
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2 py-2.5 text-sm">{content}</div>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>

@@ -52,7 +52,7 @@ export default function GmailConnect() {
         <Mail className="h-4 w-4 text-indigo-600" /> Gmail connection
       </h3>
       <p className="mb-3 mt-1 text-sm text-slate-500 dark:text-slate-400">
-        Mail aapke apne Gmail se jaati hai. Iske liye ek baar Gmail connect karna padta hai.
+        connect your mail
       </p>
 
       {result && (

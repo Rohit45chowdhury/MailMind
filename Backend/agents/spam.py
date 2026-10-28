@@ -6,7 +6,7 @@ from typing import TypedDict, List, Optional
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 
-from llm import llm  # shared Groq LLM (llm.py)
+from services.llm import llm  # shared Groq LLM (llm.py)
 
 
 # ---------- State ----------

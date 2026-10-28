@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()  # user_auth import se PEHLE
 
+import os
 from typing import Optional, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -8,26 +9,34 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from summrizer import graph
-from spam import spam_graph
-from email_generator import email_graph
-from emailsender import send_email, EmailSendError
-from grammar_check import grammar_graph
-from user_auth import router as auth_router, get_current_user
-from google_oauth import router as google_router
-from stats import router as stats_router, log
-from calendar_agent import calendar_graph, TZ_NAME
-from calendar_service import CalendarError, parse_event_times
+from agents.summrizer import graph
+from agents.spam import spam_graph
+from agents.email_generator import email_graph
+from services.emailsender import send_email, EmailSendError
+from agents.grammar_check import grammar_graph
+from routers.user_auth import router as auth_router, get_current_user
+from services.google_oauth import router as google_router
+from routers.stats import router as stats_router, log, resolve
+from agents.calendar_agent import calendar_graph, TZ_NAME
+from services.calendar_service import CalendarError, parse_event_times
 
 import uuid
 from langgraph.types import Command
-from email_approval import approval_graph
+from agents.email_approval import approval_graph
 
 app = FastAPI(title="Email Agent")
 
+# Production me .env / Render me: ALLOWED_ORIGINS=https://tumhara-frontend.vercel.app
+# (comma separated, aakhir me / mat lagana)
+ALLOWED_ORIGINS = [
+    o.strip().rstrip("/")
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -213,7 +222,27 @@ async def draft(req: DraftIn, user: dict = Depends(get_current_user)):
     await approval_graph.ainvoke(payload, config)
 
     snap = await approval_graph.aget_state(config)
-    await log(user, "draft", req.purpose, "awaiting_approval")
+    # thread_id activity me save: Recent activity se click karke draft wapas khul sake
+    await log(user, "draft", req.purpose, "awaiting_approval", thread_id)
+    return {
+        "thread_id": thread_id,
+        "to": snap.values["to"],
+        "subject": snap.values["subject"],
+        "body": snap.values["body"],
+    }
+
+
+@app.get("/draft/{thread_id}", response_model=DraftOut)
+async def get_draft(thread_id: str, user: dict = Depends(get_current_user)):
+    """Recent activity se click karne par pending draft wapas laata hai."""
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = await approval_graph.aget_state(config)
+    if not snap.values or not snap.next:
+        # server restart ke baad draft memory se chala jata hai: row ko 'expired' kar do
+        await resolve(user, thread_id, "expired")
+        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
+    if snap.values.get("owner") != _owner(user):
+        raise HTTPException(403, "Ye draft tumhara nahi hai")
     return {
         "thread_id": thread_id,
         "to": snap.values["to"],
@@ -243,7 +272,7 @@ async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
         # pehle approve ho chuka tha par send fail hua (jaise Gmail connection expire).
         # Ab sirf send node dubara chalana hai.
         if req.action == "reject":
-            await log(user, "draft", snap.values["to"], "rejected")
+            await resolve(user, req.thread_id, "rejected")
             return {"status": "rejected"}
         _require_gmail(user)
         cmd = None
@@ -254,9 +283,10 @@ async def approve(req: DecisionIn, user: dict = Depends(get_current_user)):
         raise HTTPException(400, str(e))
 
     if result.get("decision") == "reject":
-        await log(user, "draft", snap.values["to"], "rejected")
+        await resolve(user, req.thread_id, "rejected")
         return {"status": "rejected"}
 
+    await resolve(user, req.thread_id, "approved")
     await log(user, "send", snap.values["to"], "sent")
     return result["send_result"]
 
@@ -324,7 +354,20 @@ async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user))
         await log(user, "calendar", email.subject, "no_meeting")
         return {"has_meeting": False, "thread_id": None, "event": None}
 
-    await log(user, "calendar", email.subject, "awaiting_approval")
+    await log(user, "calendar", email.subject, "awaiting_approval", thread_id)
+    return {"has_meeting": True, "thread_id": thread_id, "event": snap.values["event"]}
+
+
+@app.get("/calendar/draft/{thread_id}")
+async def get_calendar_draft(thread_id: str, user: dict = Depends(get_current_user)):
+    """Recent activity se click karne par pending calendar draft wapas laata hai."""
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = await calendar_graph.aget_state(config)
+    if not snap.values or not snap.next:
+        await resolve(user, thread_id, "expired")
+        raise HTTPException(404, "Draft nahi mila ya pehle hi process ho chuka hai")
+    if snap.values.get("owner") != _owner(user):
+        raise HTTPException(403, "Ye draft tumhara nahi hai")
     return {"has_meeting": True, "thread_id": thread_id, "event": snap.values["event"]}
 
 
@@ -356,7 +399,7 @@ async def calendar_approve(req: CalendarDecisionIn, user: dict = Depends(get_cur
     else:
         # Approved earlier but create failed (e.g. token problem): just retry create node
         if req.action == "reject":
-            await log(user, "calendar", title, "rejected")
+            await resolve(user, req.thread_id, "rejected")
             return {"status": "rejected"}
         cmd = None
 
@@ -366,8 +409,9 @@ async def calendar_approve(req: CalendarDecisionIn, user: dict = Depends(get_cur
         raise HTTPException(400, str(e))
 
     if result.get("decision") == "reject":
-        await log(user, "calendar", title, "rejected")
+        await resolve(user, req.thread_id, "rejected")
         return {"status": "rejected"}
 
+    await resolve(user, req.thread_id, "approved")
     await log(user, "calendar", title, "created")
     return result["event_result"]

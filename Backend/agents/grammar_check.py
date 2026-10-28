@@ -5,7 +5,7 @@ from typing import TypedDict, List, Literal
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 
-from llm import llm  # shared Groq LLM (llm.py)
+from services.llm import llm  # shared Groq LLM (llm.py)
 
 MAX_CHARS = 8000
 
