@@ -32,11 +32,12 @@ app = FastAPI(title="MailMind API")
 
 
 # ---------- CORS ----------
+
 ALLOWED_ORIGINS = [
     origin.strip().rstrip("/")
     for origin in os.getenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,https://mail-mind-521m.vercel.app",
     ).split(",")
     if origin.strip()
 ]
@@ -48,6 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.include_router(auth_router)
 app.include_router(google_router)
