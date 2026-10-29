@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // Single configured client. The base URL comes only from VITE_API_URL.
-const BASE_URL = (import.meta.env.BACKEND_URL || '').replace(/\/$/, '')
+const BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
 const api = axios.create({
   baseURL: BASE_URL || undefined,
