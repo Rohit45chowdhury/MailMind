@@ -316,6 +316,20 @@ def me(user: dict = Depends(get_current_user)):
     return public_user(user)
 
 
+class ProfileIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+@router.patch("/me")
+def update_me(data: ProfileIn, user: dict = Depends(get_current_user)):
+    name = " ".join(data.name.split())  # extra spaces hata do
+    if not name:
+        raise HTTPException(400, "Name empty nahi ho sakta.")
+    users.update_one({"_id": user["_id"]}, {"$set": {"name": name}})
+    user["name"] = name
+    return public_user(user)
+
+
 @router.post("/logout")
 def logout(response: Response):
     # delete_cookie me wahi samesite/secure dena zaruri hai jo set karte waqt tha

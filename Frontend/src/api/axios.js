@@ -59,6 +59,7 @@ export const resetStats = async () => (await api.delete('/stats')).data
 export const registerUser = async (p) => (await api.post('/auth/register', p)).data
 export const loginUser = async (p) => (await api.post('/auth/login', p)).data
 export const getMe = async () => (await api.get('/auth/me')).data
+export const updateProfile = async (p) => (await api.patch('/auth/me', p)).data
 export const logoutUser = async () => (await api.post('/auth/logout')).data
 
 export const createDraft = (payload) => api.post('/draft', payload).then((r) => r.data)

@@ -11,7 +11,7 @@ export default function DashboardLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Header onMenu={() => setOpen(true)} />
         <main className="flex-1 p-4 sm:p-6"><Outlet /></main>
-        <footer className="border-t border-slate-200 px-6 py-3 text-xs text-slate-500 dark:border-slate-800">MailMind AI v1.0.0 · Built with FastAPI, LangGraph and Groq</footer>
+        <footer className="border-t border-slate-200 px-6 py-3 text-xs text-slate-500 dark:border-slate-800">MailMind AI v1.0.0</footer>
       </div>
     </div>
   )
