@@ -3,13 +3,12 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle2,
   Loader2,
-  PenLine,
   Send,
   Sparkles,
   X,
 } from 'lucide-react'
 
-import Field, { EmptyState } from '../components/Field.jsx'
+import Field from '../components/Field.jsx'
 import ErrorMessage from '../components/ErrorMessage.jsx'
 import useRequest from '../hooks/useRequest.js'
 import {
@@ -315,6 +314,9 @@ export default function DraftApproval() {
   const hasIncomingContent =
     Boolean(edit.subject.trim() || edit.body.trim())
 
+  // Approval panel tabhi dikhao jab draft ban chuka ho (ya result screen ho)
+  const showReview = Boolean(draft || done)
+
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       {gmailMissing && (
@@ -336,9 +338,28 @@ export default function DraftApproval() {
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Left: form */}
+      <div
+        className={
+          showReview
+            ? 'grid gap-6 lg:grid-cols-2'
+            : 'mx-auto max-w-3xl'
+        }
+      >
+        {/* Step 1: form (always visible) */}
         <form onSubmit={makeDraft} className="card space-y-4" noValidate>
+          {/* Content coming from Email Generator, before a draft exists */}
+          {!draft && hasIncomingContent && (
+            <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-300">
+              <p className="font-medium">Email received from Email Generator</p>
+              <p className="mt-1 truncate">
+                Subject: <b>{edit.subject || '(none)'}</b>
+              </p>
+              <p className="mt-1 text-xs opacity-80">
+                Check the recipient below, then create the draft.
+              </p>
+            </div>
+          )}
+
           <Field
             id="purpose"
             as="textarea"
@@ -384,7 +405,6 @@ export default function DraftApproval() {
             >
               <option value="English">English</option>
               <option value="Hindi">Hindi</option>
-              
             </Field>
 
             <Field
@@ -453,147 +473,114 @@ export default function DraftApproval() {
           </button>
         </form>
 
-        {/* Right: review and approval */}
-        <section className="card space-y-4" aria-live="polite">
-          <h2 className="font-semibold text-slate-900 dark:text-white">
-            Draft for approval
-          </h2>
+        {/* Step 2: review and approval (only after a draft exists) */}
+        {showReview && (
+          <section className="card space-y-4" aria-live="polite">
+            <h2 className="font-semibold text-slate-900 dark:text-white">
+              Draft for approval
+            </h2>
 
-          {done ? (
-            <>
-              <div
-                role="status"
-                className="flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
-              >
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                {done === 'sent'
-                  ? `Email sent${sentFrom ? ` from ${sentFrom}` : ''} to ${draft?.to}.`
-                  : 'Draft rejected. Nothing was sent.'}
-              </div>
+            {done ? (
+              <>
+                <div
+                  role="status"
+                  className="flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                >
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  {done === 'sent'
+                    ? `Email sent${sentFrom ? ` from ${sentFrom}` : ''} to ${draft?.to}.`
+                    : 'Draft rejected. Nothing was sent.'}
+                </div>
 
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={startOver}
-              >
-                Write another
-              </button>
-            </>
-          ) : (
-            <>
-              {draft ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={startOver}
+                >
+                  Write another
+                </button>
+              </>
+            ) : (
+              <>
                 <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
                   Review your email. Nothing will be sent until you approve it.
                 </p>
-              ) : hasIncomingContent ? (
-                <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-300">
-                  Email received from Email Generator. Check the recipient and
-                  content, then create the draft.
+
+                <p className="text-sm">
+                  {gmail?.email && (
+                    <>
+                      From: <b>{gmail.email}</b> ·{' '}
+                    </>
+                  )}
+                  To: <b>{draft?.to || f.to || 'Not specified'}</b>
                 </p>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  Generate an email or use content from Email Generator.
-                </p>
-              )}
 
-              <p className="text-sm">
-                {gmail?.email && (
-                  <>
-                    From: <b>{gmail.email}</b> ·{' '}
-                  </>
-                )}
-                To: <b>{f.to || 'Not specified'}</b>
-              </p>
+                <Field
+                  id="out-subject"
+                  label="Subject"
+                  value={edit.subject}
+                  onChange={(e) =>
+                    setEdit((prev) => ({
+                      ...prev,
+                      subject: e.target.value,
+                    }))
+                  }
+                />
 
-              <Field
-                id="out-subject"
-                label="Subject"
-                value={edit.subject}
-                onChange={(e) =>
-                  setEdit((prev) => ({
-                    ...prev,
-                    subject: e.target.value,
-                  }))
-                }
-              />
+                <Field
+                  id="out-body"
+                  as="textarea"
+                  rows={12}
+                  label="Email body"
+                  value={edit.body}
+                  onChange={(e) =>
+                    setEdit((prev) => ({
+                      ...prev,
+                      body: e.target.value,
+                    }))
+                  }
+                />
 
-              <Field
-                id="out-body"
-                as="textarea"
-                rows={12}
-                label="Email body"
-                value={edit.body}
-                onChange={(e) =>
-                  setEdit((prev) => ({
-                    ...prev,
-                    body: e.target.value,
-                  }))
-                }
-              />
+                <ErrorMessage message={deciding.error} />
+                <GmailLink error={deciding.error} />
 
-              <ErrorMessage message={deciding.error} />
-              <GmailLink error={deciding.error} />
-
-              <div className="flex flex-wrap gap-3">
-                {draft ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={approve}
-                      disabled={
-                        deciding.loading ||
-                        !edit.subject.trim() ||
-                        !edit.body.trim()
-                      }
-                    >
-                      {deciding.loading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
-                      {deciding.loading
-                        ? 'Sending…'
-                        : changed
-                          ? 'Approve edited and send'
-                          : 'Approve and send'}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={reject}
-                      disabled={deciding.loading}
-                    >
-                      <X className="h-4 w-4" />
-                      Reject
-                    </button>
-                  </>
-                ) : (
+                <div className="flex flex-wrap gap-3">
                   <button
                     type="button"
                     className="btn-primary"
-                    onClick={makeDraft}
+                    onClick={approve}
                     disabled={
-                      drafting.loading ||
-                      Boolean(gmailMissing) ||
-                      !f.to.trim() ||
+                      deciding.loading ||
                       !edit.subject.trim() ||
                       !edit.body.trim()
                     }
                   >
-                    {drafting.loading ? (
+                    {deciding.loading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      <CheckCircle2 className="h-4 w-4" />
+                      <Send className="h-4 w-4" />
                     )}
-                    {drafting.loading ? 'Creating draft…' : 'Create draft'}
+                    {deciding.loading
+                      ? 'Sending…'
+                      : changed
+                        ? 'Approve edited and send'
+                        : 'Approve and send'}
                   </button>
-                )}
-              </div>
-            </>
-          )}
-        </section>
+
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={reject}
+                    disabled={deciding.loading}
+                  >
+                    <X className="h-4 w-4" />
+                    Reject
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        )}
       </div>
     </div>
   )
