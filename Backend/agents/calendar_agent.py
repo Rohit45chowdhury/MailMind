@@ -11,12 +11,14 @@ from langgraph.types import interrupt
 from services.llm import llm
 from services.calendar_service import create_event
 
-TZ_NAME = os.getenv("CALENDAR_TIMEZONE", "Asia/Kolkata")
+TZ_NAME = os.getenv("CALENDAR_TIMEZONE", "Asia/Kolkata")  # fallback timezone
 
 
 # ---------- State ----------
 class CalState(TypedDict, total=False):
-    owner: str
+    owner: str             # user email (draft ownership check)
+    user_id: str           # Mongo _id, token isi se load hota hai
+    tz: str                # user ka IANA timezone
     sender: str
     subject: str
     body: str
@@ -46,10 +48,11 @@ structured_llm = llm.with_structured_output(ExtractedEvent)
 
 # ---------- Nodes ----------
 def extract(state: CalState) -> CalState:
-    now = datetime.now(ZoneInfo(TZ_NAME))
+    tz_name = state.get("tz") or TZ_NAME
+    now = datetime.now(ZoneInfo(tz_name))
     prompt = f"""You extract meeting details from an email.
 
-Today is {now.strftime('%Y-%m-%d')} ({now.strftime('%A')}). Timezone: {TZ_NAME}.
+Today is {now.strftime('%Y-%m-%d')} ({now.strftime('%A')}). Timezone: {tz_name}.
 Resolve relative dates like "tomorrow" or "next Monday" using today's date.
 
 Rules:
@@ -103,7 +106,10 @@ def route_after_review(state: CalState) -> str:
 
 def create(state: CalState):
     result = create_event(
-        state["event"], TZ_NAME, send_invites=state.get("send_invites", False)
+        state["event"],
+        state.get("tz") or TZ_NAME,
+        state["user_id"],
+        send_invites=state.get("send_invites", False),
     )
     return {"event_result": result}
 
@@ -122,6 +128,7 @@ def build_calendar_graph():
                             {"create": "create", "end": END})
     g.add_edge("create", END)
 
+    # NOTE: MemorySaver restart / multiple instances par pending approvals kho deta hai
     return g.compile(checkpointer=MemorySaver())
 
 

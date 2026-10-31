@@ -29,7 +29,7 @@ export function getErrorMessage(err) {
 
     // 422 = validation error from FastAPI
     if (status === 422) return text ? `Check your input. ${text}` : 'The server rejected this input. Check the fields and try again.'
-    // 400 = our own readable message (e.g. "Pehle Settings me apna Gmail connect karo.")
+    // 400 = our own readable message (e.g. "Connect your Gmail in Settings first.")
     if (status === 400) return text || 'The server rejected this request. Check the fields and try again.'
     if (status >= 500) return `The server hit an error (${status}). ${text || 'Check the backend logs for details.'}`
     return text || `Request failed with status ${status}.`
@@ -73,9 +73,20 @@ export const getDraft = (threadId) =>
 export const getCalendarDraft = (threadId) =>
   api.get(`/calendar/draft/${threadId}`).then((r) => r.data)
 
-export const getGmailStatus = async () => (await api.get('/google/status')).data
-export const getGmailConnectUrl = async () => (await api.get('/google/connect')).data.url
-export const disconnectGmail = async () => (await api.post('/google/disconnect')).data
+// ---- Google connection (Gmail + Calendar share one connection) ----
+// Status shape: { connected, gmail, calendar, email }
+export const getGoogleStatus = async () => (await api.get('/google/status')).data
+
+// feature: 'gmail' | 'calendar' | 'all'
+export const getGoogleConnectUrl = async (feature = 'all') =>
+  (await api.get('/google/connect', { params: { feature } })).data.url
+
+export const disconnectGoogle = async () => (await api.post('/google/disconnect')).data
+
+// Old names kept so any other file importing them keeps working
+export const getGmailStatus = getGoogleStatus
+export const getGmailConnectUrl = () => getGoogleConnectUrl('gmail')
+export const disconnectGmail = disconnectGoogle
 
 // A 401 from a tool endpoint means the session expired: tell AuthContext to sign out.
 api.interceptors.response.use(

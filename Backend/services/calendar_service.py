@@ -1,14 +1,15 @@
 import os
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
+from bson import ObjectId
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
-TOKEN_FILE = "token.json"
+from routers.user_auth import users
+from services.google_creds import CALENDAR_SCOPE, GoogleAuthError, credentials_for
+
+DEFAULT_TZ = os.getenv("CALENDAR_TIMEZONE", "Asia/Kolkata")
 DEFAULT_DURATION_MIN = 60
 
 
@@ -16,22 +17,27 @@ class CalendarError(Exception):
     """Calendar event banane me koi problem aayi."""
 
 
-def _get_service():
-    if not os.path.exists(TOKEN_FILE):
-        raise CalendarError("token.json nahi mila. Pehle `python calendar_login.py` chalao.")
+def valid_tz(name: str | None) -> str:
+    if name:
+        try:
+            ZoneInfo(name)
+            return name
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return DEFAULT_TZ
 
-    creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                raise CalendarError(f"Google token refresh fail hua: {e}")
-            with open(TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
-        else:
-            raise CalendarError("Google login expire ho gaya. `python calendar_login.py` dobara chalao.")
 
+def _get_service(user_id: str):
+    try:
+        user = users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        user = None
+    if not user:
+        raise CalendarError("User nahi mila")
+    try:
+        creds = credentials_for(user, CALENDAR_SCOPE)
+    except GoogleAuthError as e:
+        raise CalendarError(str(e))
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
@@ -59,7 +65,7 @@ def parse_event_times(event: dict, tz_name: str) -> tuple[datetime, datetime]:
     return start, end
 
 
-def create_event(event: dict, tz_name: str, send_invites: bool = False) -> dict:
+def create_event(event: dict, tz_name: str, user_id: str, send_invites: bool = False) -> dict:
     start, end = parse_event_times(event, tz_name)
 
     body = {
@@ -77,7 +83,7 @@ def create_event(event: dict, tz_name: str, send_invites: bool = False) -> dict:
 
     try:
         created = (
-            _get_service()
+            _get_service(user_id)
             .events()
             .insert(
                 calendarId="primary",
@@ -88,6 +94,8 @@ def create_event(event: dict, tz_name: str, send_invites: bool = False) -> dict:
             .execute()
         )
     except HttpError as e:
+        if e.resp.status in (401, 403):
+            raise CalendarError("Calendar permission nahi mili. Settings mein Calendar dobara connect karo.")
         raise CalendarError(f"Google Calendar error: {e}")
 
     return {

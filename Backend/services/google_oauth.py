@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 from bson import ObjectId
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token as google_id_token
@@ -11,9 +11,8 @@ from google_auth_oauthlib.flow import Flow
 
 from core.token_crypto import enc
 from routers.user_auth import users, get_current_user, set_auth_cookie, JWT_SECRET, JWT_ALGO
+from services.google_creds import GMAIL_SCOPE, CALENDAR_SCOPE, has_scope
 
-# Google may return fewer scopes than requested (user unticks a box).
-# Without this, oauthlib raises a scope-mismatch error.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -21,20 +20,20 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/google/callback")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-# Login needs only basic profile scopes (no Google verification needed)
 LOGIN_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
-# Gmail permission is asked separately, from Settings
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+FEATURES = {"gmail": GMAIL_SCOPE, "calendar": CALENDAR_SCOPE}
 
 router = APIRouter(prefix="/google", tags=["google"])
 
 
-def _scopes_for(mode: str) -> list[str]:
-    return LOGIN_SCOPES if mode == "login" else LOGIN_SCOPES + [GMAIL_SCOPE]
+def _scopes_for(mode: str, features: list[str]) -> list[str]:
+    if mode == "login":
+        return LOGIN_SCOPES
+    return LOGIN_SCOPES + [FEATURES[f] for f in features if f in FEATURES]
 
 
 def _flow(scopes: list[str]) -> Flow:
@@ -53,16 +52,19 @@ def _flow(scopes: list[str]) -> Flow:
     )
 
 
-def _state(mode: str, user_id: str | None = None) -> str:
-    payload = {"mode": mode, "exp": datetime.now(timezone.utc) + timedelta(minutes=10)}
+def _state(mode: str, user_id: str | None = None, features: list[str] | None = None) -> str:
+    payload = {
+        "mode": mode,
+        "features": features or [],
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=10),
+    }
     if user_id:
         payload["sub"] = user_id
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 
-def _auth_url(state: str, mode: str, login_hint: str | None = None) -> str:
+def _auth_url(state: str, mode: str, features: list[str], login_hint: str | None = None) -> str:
     if mode == "login":
-        # Login only: no Gmail access, no refresh token needed
         kwargs = dict(prompt="select_account", state=state)
     else:
         kwargs = dict(
@@ -71,7 +73,7 @@ def _auth_url(state: str, mode: str, login_hint: str | None = None) -> str:
         )
         if login_hint:
             kwargs["login_hint"] = login_hint
-    url, _ = _flow(_scopes_for(mode)).authorization_url(**kwargs)
+    url, _ = _flow(_scopes_for(mode, features)).authorization_url(**kwargs)
     return url
 
 
@@ -80,7 +82,7 @@ def _back(mode: str, result: str) -> RedirectResponse:
     return RedirectResponse(f"{FRONTEND_URL}{page}?gmail={result}")
 
 
-def _save_tokens(user: dict, creds, google_email: str) -> None:
+def _save_tokens(user: dict, creds, google_email: str, scopes: list[str]) -> None:
     old = user.get("google") or {}
     refresh_enc = enc(creds.refresh_token) if creds.refresh_token else old.get("refresh_token")
     users.update_one({"_id": user["_id"]}, {"$set": {"google": {
@@ -88,21 +90,27 @@ def _save_tokens(user: dict, creds, google_email: str) -> None:
         "access_token": enc(creds.token),
         "refresh_token": refresh_enc,
         "expiry": creds.expiry,
+        "scopes": scopes,
     }}})
 
 
 # ---------- Login with Google ----------
 @router.get("/login")
 def google_login():
-    """Login page ka 'Continue with Google' button seedha isko kholta hai."""
-    return RedirectResponse(_auth_url(_state("login"), "login"))
+    return RedirectResponse(_auth_url(_state("login"), "login", []))
 
 
-# ---------- Connect Gmail (already logged-in users) ----------
+# ---------- Connect Gmail / Calendar (logged-in users) ----------
 @router.get("/connect")
-def connect(user: dict = Depends(get_current_user)):
-    return {"url": _auth_url(_state("connect", str(user["_id"])), "connect",
-                             login_hint=user["email"])}
+def connect(feature: str = "all", user: dict = Depends(get_current_user)):
+    if feature == "all":
+        features = list(FEATURES)
+    elif feature in FEATURES:
+        features = [feature]
+    else:
+        raise HTTPException(400, "feature gmail, calendar ya all hona chahiye")
+    return {"url": _auth_url(_state("connect", str(user["_id"]), features), "connect",
+                             features, login_hint=user["email"])}
 
 
 # ---------- Callback for both ----------
@@ -113,11 +121,12 @@ def callback(code: str = "", state: str = "", error: str = ""):
     except Exception:
         return _back("connect", "invalid")
     mode = st.get("mode", "connect")
+    features = st.get("features") or ["gmail"]
 
     if error or not code:
         return _back(mode, "denied")
 
-    flow = _flow(_scopes_for(mode))
+    flow = _flow(_scopes_for(mode, features))
     try:
         flow.fetch_token(code=code)
         creds = flow.credentials
@@ -138,7 +147,7 @@ def callback(code: str = "", state: str = "", error: str = ""):
             doc = {
                 "name": (info.get("name") or google_email.split("@")[0])[:60],
                 "email": google_email,
-                "password_hash": None,          # no password, Google-only account
+                "password_hash": None,
                 "email_verified": True,
                 "failed_attempts": 0,
                 "locked_until": None,
@@ -149,7 +158,6 @@ def callback(code: str = "", state: str = "", error: str = ""):
         elif not user.get("email_verified"):
             users.update_one({"_id": user["_id"]}, {"$set": {"email_verified": True}})
 
-        # No token saving here: Gmail is connected separately from Settings
         resp = RedirectResponse(f"{FRONTEND_URL}/")
         set_auth_cookie(resp, str(user["_id"]))
         return resp
@@ -161,20 +169,30 @@ def callback(code: str = "", state: str = "", error: str = ""):
     if google_email != user["email"].lower():
         return _back(mode, "mismatch")
 
-    granted = set(getattr(creds, "granted_scopes", None) or creds.scopes or [])
-    if GMAIL_SCOPE not in granted:
-        return _back(mode, "denied")  # user unticked Gmail permission
+    # Asli granted scopes token response se lo (creds.scopes me requested scopes hote hain)
+    raw = flow.oauth2session.token.get("scope") or []
+    granted = set(raw.split() if isinstance(raw, str) else raw)
+    kept = sorted(granted & set(FEATURES.values()))
+    if not kept:
+        return _back(mode, "denied")  # user ne koi permission tick nahi ki
     if not creds.refresh_token and not (user.get("google") or {}).get("refresh_token"):
         return _back(mode, "failed")
 
-    _save_tokens(user, creds, google_email)
-    return _back(mode, "connected")
+    _save_tokens(user, creds, google_email, kept)
+    wanted = {FEATURES[f] for f in features}
+    return _back(mode, "connected" if wanted <= set(kept) else "partial")
 
 
 @router.get("/status")
 def status(user: dict = Depends(get_current_user)):
-    g = user.get("google")
-    return {"connected": bool(g and g.get("refresh_token")), "email": (g or {}).get("email")}
+    g = user.get("google") or {}
+    gmail = has_scope(user, GMAIL_SCOPE)
+    return {
+        "connected": gmail,            # purana field, frontend ke liye same rakha
+        "gmail": gmail,
+        "calendar": has_scope(user, CALENDAR_SCOPE),
+        "email": g.get("email"),
+    }
 
 
 @router.post("/disconnect")

@@ -7,7 +7,8 @@ export default function Settings() {
   const { dark, toggleTheme } = useApp()
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <GmailConnect />
+      {/* Shows both Gmail and Google Calendar rows with one Connect button */}
+      <GmailConnect feature="all" />
 
       <section className="card">
         <h2 className="font-semibold text-slate-900 dark:text-white">Appearance</h2>

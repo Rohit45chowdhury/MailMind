@@ -22,9 +22,10 @@ from agents.email_approval import approval_graph
 from agents.calendar_agent import calendar_graph, TZ_NAME
 
 from services.emailsender import send_email, EmailSendError
-from services.calendar_service import CalendarError, parse_event_times
+from services.calendar_service import CalendarError, parse_event_times, valid_tz
+from services.google_creds import GMAIL_SCOPE, CALENDAR_SCOPE, has_scope
 from services.google_oauth import router as google_router
-from routers.user_auth import router as auth_router, get_current_user
+from routers.user_auth import router as auth_router, get_current_user, users
 from routers.stats import router as stats_router, log, resolve
 
 
@@ -97,6 +98,10 @@ class EmailIn(BaseModel):
     sender: str
     subject: str
     body: str
+
+
+class CalendarDraftIn(EmailIn):
+    timezone: Optional[str] = None   # browser ka IANA timezone
 
 
 class SummaryOut(BaseModel):
@@ -189,10 +194,18 @@ def _owner(user: dict) -> str:
 
 
 def _require_gmail(user: dict) -> None:
-    if not (user.get("google") or {}).get("refresh_token"):
+    if not has_scope(user, GMAIL_SCOPE):
         raise HTTPException(
             status_code=400,
             detail="Pehle Settings mein apna Gmail connect karo.",
+        )
+
+
+def _require_calendar(user: dict) -> None:
+    if not has_scope(user, CALENDAR_SCOPE):
+        raise HTTPException(
+            status_code=400,
+            detail="Pehle Settings mein Google Calendar connect karo.",
         )
 
 
@@ -421,9 +434,15 @@ async def grammar_check(req: GrammarIn, user: dict = Depends(get_current_user)):
     }
 
 
+# ---------- Calendar ----------
 @app.post("/calendar/draft")
-async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user)):
+async def calendar_draft(email: CalendarDraftIn, user: dict = Depends(get_current_user)):
     _validate_email(email)
+    _require_calendar(user)  # LLM chalane se pehle check
+
+    tz = valid_tz(email.timezone or user.get("timezone"))
+    if tz != user.get("timezone"):
+        users.update_one({"_id": user["_id"]}, {"$set": {"timezone": tz}})
 
     thread_id = str(uuid.uuid4())
     config = _thread_config(thread_id)
@@ -435,6 +454,8 @@ async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user))
                 "subject": email.subject,
                 "body": email.body,
                 "owner": _owner(user),
+                "user_id": str(user["_id"]),
+                "tz": tz,
             },
             config,
         )
@@ -448,13 +469,14 @@ async def calendar_draft(email: EmailIn, user: dict = Depends(get_current_user))
 
     if not snapshot.next:
         await log(user, "calendar", email.subject, "no_meeting")
-        return {"has_meeting": False, "thread_id": None, "event": None}
+        return {"has_meeting": False, "thread_id": None, "event": None, "timezone": tz}
 
     await log(user, "calendar", email.subject, "awaiting_approval", thread_id)
     return {
         "has_meeting": True,
         "thread_id": thread_id,
         "event": snapshot.values["event"],
+        "timezone": tz,
     }
 
 
@@ -471,6 +493,7 @@ async def get_calendar_draft(thread_id: str, user: dict = Depends(get_current_us
         "has_meeting": True,
         "thread_id": thread_id,
         "event": snapshot.values["event"],
+        "timezone": snapshot.values.get("tz") or TZ_NAME,
     }
 
 
@@ -490,11 +513,13 @@ async def calendar_approve(
         )
 
     title = snapshot.values.get("event", {}).get("title", "")
+    tz = snapshot.values.get("tz") or TZ_NAME
 
     if "human_review" in snapshot.next:
         payload = {"action": req.action}
 
         if req.action == "approve":
+            _require_calendar(user)
             if not req.event:
                 raise HTTPException(
                     status_code=400,
@@ -503,7 +528,7 @@ async def calendar_approve(
 
             event = req.event.model_dump()
             try:
-                parse_event_times(event, TZ_NAME)
+                parse_event_times(event, tz)
             except CalendarError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -515,6 +540,7 @@ async def calendar_approve(
         if req.action == "reject":
             await resolve(user, req.thread_id, "rejected")
             return {"status": "rejected"}
+        _require_calendar(user)
         command = None
 
     try:
